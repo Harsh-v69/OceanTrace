@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SAMUDRA NETRA - Operations Console</title>
+<link rel="stylesheet" href="vendor/leaflet.css">
+<link rel="stylesheet" href="css/app.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%232ea6ff' stroke-width='2.5'/%3E%3Ccircle cx='16' cy='16' r='3.5' fill='%232ea6ff'/%3E%3C/svg%3E">
+</head>
+<body>
+<div id="app" hidden>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark"></span>
+      <span class="brand-name">SAMUDRA&nbsp;NETRA</span>
+      <span class="brand-sub">Operations Console</span>
+    </div>
+    <div class="topbar-right">
+      <span id="env-chip" class="chip"></span>
+      <button id="theme-toggle" class="icon-btn" title="Toggle light / dark">&#9681;</button>
+      <div id="user-chip" class="user-chip"></div>
+      <button id="logout-btn" class="btn btn-ghost">Sign out</button>
+    </div>
+  </header>
+  <div class="body">
+    <nav id="nav" class="sidenav"></nav>
+    <main id="view" class="view"></main>
+  </div>
+</div>
+
+<div id="auth" class="auth-screen">
+  <form id="auth-form" class="auth-card">
+    <div class="brand big"><span class="brand-mark"></span>
+      <div><div class="brand-name">SAMUDRA NETRA</div>
+      <div class="brand-sub">Satellite oil-spill detection &amp; vessel attribution</div></div></div>
+    <div id="auth-tabs" class="tabs">
+      <button type="button" data-mode="login" class="active">Sign in</button>
+      <button type="button" data-mode="register">Register</button>
+    </div>
+    <label id="name-label" hidden>Full name<input name="name" autocomplete="name"></label>
+    <label>Email<input name="email" type="email" autocomplete="username" required></label>
+    <label>Password<input name="password" type="password" autocomplete="current-password" required minlength="8"></label>
+    <div id="reg-extra" hidden>
+      <label>Mobile number (for SMS alerts)<input name="phone_number" placeholder="+15005550006"></label>
+      <label>Role
+        <select name="role">
+          <option value="PILOT">PILOT - one coastal zone</option>
+          <option value="REGIONAL">REGIONAL - a maritime region</option>
+          <option value="NATIONAL">NATIONAL - all zones</option>
+        </select>
+      </label>
+      <label>Assigned zones (comma-separated codes, e.g. IN-MH)
+        <input name="jurisdiction_codes" placeholder="IN-MH"></label>
+    </div>
+    <button type="submit" class="btn btn-primary" id="auth-submit">Sign in</button>
+    <p id="auth-msg" class="auth-msg"></p>
+    <p class="auth-hint">Demo: register a NATIONAL user to run every scenario, or a
+      PILOT with zone <code>IN-MH</code> for the Mumbai flow.</p>
+  </form>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="vendor/leaflet.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

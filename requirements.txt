@@ -1,0 +1,49 @@
+# Unified backend - Phases 2-6.
+# Offline-first, CPU-only. Phase 6 adds the POSEatSea AIS autoencoder + LSTM
+# (torch, pandas). The pre-trained models are committed under
+# backend/ml/{ais,trajectory}/models/ - no download at runtime.
+
+# --- web service -----------------------------------------------------------
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9          # OAuth2 form login
+
+# --- data model ----------------------------------------------------------
+SQLAlchemy>=2.0
+pydantic>=2.6
+pydantic-settings>=2.2
+email-validator>=2.1
+
+# --- security ----------------------------------------------------------
+PyJWT>=2.8
+bcrypt>=4.1
+
+# --- alerting --------------------------------------------------------
+# Only needed for real SMS (SMS_PROVIDER=twilio); the Mock provider is the
+# default and TwilioSmsProvider degrades to a FAILED result without it.
+# twilio>=9.0
+
+# --- geometry (RBAC point-in-polygon over GeoJSON jurisdictions) --------
+shapely>=2.0
+
+# --- POSEatSea AIS intelligence (Phase 6) - CPU only ------------------
+# Install torch from the CPU wheel index: keeps it ~200 MB, not ~2.5 GB of CUDA.
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.2,<3
+pandas>=2.0
+# scikit-learn (already listed) - the AIS StandardScaler was pickled under
+# 1.6.1; it unpickles and predicts correctly on 1.9.x with a version warning
+# that backend.ml.ais.anomaly.load_model silences.
+
+# --- SAR detection pipeline (Phase 3) - CPU only, no torch, no U-Net ----
+numpy>=1.26
+scipy>=1.11
+scikit-image>=0.22          # regionprops, GLCM, watershed
+scikit-learn>=1.6           # RF + GB voting ensemble (the SN detector)
+opencv-python-headless>=4.9  # speckle filter, morphology, contours
+joblib>=1.3                 # classifier persistence
+tifffile>=2024.1           # GeoTIFF ingestion (no GDAL / rasterio needed)
+
+# --- dev / test --------------------------------------------------------
+httpx>=0.27
+pytest>=8.0
