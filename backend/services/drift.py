@@ -298,6 +298,33 @@ def land_from_geojson(polygons: Any, *, buffer_km: float = 0.0) -> LandMask:
     return LandMask(polygons=[g for g in geoms if g], buffer_km=buffer_km)
 
 
+# The simplified India land polygon the console also serves as the offline
+# basemap (`backend/static/data/coastline_in.geojson`, ~1.1 km / tol 0.01 deg).
+_COASTLINE_PATH = Path(__file__).resolve().parents[1] / "static" / "data" / "coastline_in.geojson"
+_LAND_MASK: LandMask | None = None
+_LAND_MASK_LOADED = False
+
+
+def load_indian_coastline(*, buffer_km: float = 0.0) -> LandMask | None:
+    """Cached :class:`LandMask` from the bundled simplified India coastline.
+
+    Returns ``None`` if the file is missing so the drift engine degrades to
+    "no coastline supplied" rather than raising.
+    """
+    global _LAND_MASK, _LAND_MASK_LOADED
+    if _LAND_MASK_LOADED:
+        return _LAND_MASK
+    _LAND_MASK_LOADED = True
+    try:
+        fc = json.loads(_COASTLINE_PATH.read_text(encoding="utf-8"))
+        mask = land_from_geojson(fc, buffer_km=buffer_km)
+        _LAND_MASK = mask if mask.any else None
+    except Exception as exc:  # noqa: BLE001 - missing/bad file -> no coastline
+        log.warning("Indian coastline unavailable (%s); beaching disabled", exc)
+        _LAND_MASK = None
+    return _LAND_MASK
+
+
 def _bbox_for_observed(observed: dict, pad_deg: float = 0.75) -> tuple:
     if observed.get("bbox"):
         return tuple(observed["bbox"])

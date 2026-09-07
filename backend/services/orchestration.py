@@ -208,8 +208,11 @@ def run_full_pipeline(db: Session, spec, scene, user: User) -> tuple[Investigati
 
     _lap()
     field = drift_svc.resolve_metocean_field(list(spec.bbox))
-    hind = drift_svc.run_hindcast(observed, field=field, n_particles=400, include_arrays=True)
-    fore = drift_svc.run_forecast(observed, field=field, n_particles=400, include_arrays=True)
+    land = drift_svc.load_indian_coastline()          # None if the file is missing
+    hind = drift_svc.run_hindcast(observed, field=field, n_particles=400,
+                                  include_arrays=True, land=land)
+    fore = drift_svc.run_forecast(observed, field=field, n_particles=400,
+                                  include_arrays=True, land=land)
     hind_frames = _decimate_track(*(hind["arrays"][k] for k in
                                     ("track_times_h", "track_lats", "track_lons")))
     fore_frames = _decimate_track(*(fore["arrays"][k] for k in

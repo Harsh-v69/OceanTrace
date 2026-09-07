@@ -122,6 +122,12 @@ def build_dossier(db: Session, investigation_id: int) -> dict:
             },
         },
 
+        "forward_forecast": {
+            "horizons_h": fore.get("horizons_h"),
+            "horizons": fore.get("horizons"),
+            "shoreline_contact": fore.get("coastal_impact"),
+        },
+
         "ais_evidence": {
             "traffic_gate": attr.get("gate"),
             "search": {
@@ -314,6 +320,19 @@ def dossier_markdown(d: dict) -> str:
           f"- Refined release window: {_fmt(rw['refined_window_h'])} h",
           f"- Feedback loop: {rw['feedback_loop']['n_iterations']} iteration(s), "
           f"converged={rw['feedback_loop']['converged']}", ""]
+
+    ff = d.get("forward_forecast") or {}
+    sc = ff.get("shoreline_contact") or {}
+    L += ["## 4a. Forward forecast + shoreline contact"]
+    if sc.get("will_beach"):
+        fc = sc.get("first_contact_point") or []
+        L += [f"- First landfall ETA: {_fmt(sc.get('first_contact_eta_h') or sc.get('eta_hours'))} h",
+              f"- Contact coordinates: {_fmt(fc)}",
+              f"- Oil ashore within {_fmt((ff.get('horizons_h') or [48])[-1])} h: "
+              f"{_fmt(sc.get('fraction_beached'))}",
+              f"- {sc.get('note', '')}", ""]
+    else:
+        L += [f"- {sc.get('note') or 'No shoreline contact modelled in the forecast window.'}", ""]
 
     cr = d["candidate_ranking"]
     L += ["## 5. Ranked candidate vessels", ""]

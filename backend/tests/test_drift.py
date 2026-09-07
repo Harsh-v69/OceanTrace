@@ -262,6 +262,10 @@ def test_forecast_with_land_predicts_shoreline_contact():
     assert 0.0 < ci["eta_hours"] <= 48.0
     assert ci["fraction_beached"] > 0.0
     assert len(ci["landfall_point"]) == 2
+    # Epic 2.1: a specific first-contact coordinate + a set of stranding points
+    assert len(ci["first_contact_point"]) == 2
+    assert 0.0 < ci["first_contact_eta_h"] <= 48.0
+    assert ci["contact_points"] and all(len(p) == 2 for p in ci["contact_points"])
     # once stranded, the footprint stops advancing across the coast
     assert out["horizons"][-1]["fraction_beached"] >= out["horizons"][0]["fraction_beached"]
 

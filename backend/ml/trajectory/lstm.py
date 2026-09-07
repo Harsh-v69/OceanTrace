@@ -307,34 +307,54 @@ def predict_next_position(model, history: pd.DataFrame,
 
 
 def rolling_predictions(model, track: pd.DataFrame, stride: int = 1) -> pd.DataFrame:
-    """Walk an 8-ping window along a track; predicted vs actual next position."""
+    """Walk an 8-ping window along a track; predicted vs actual next position.
+
+    Every window is normalised in its own recentred frame (``frame_for``) and
+    the whole batch is pushed through the LSTM in a single forward pass, so the
+    cost is ~O(1) torch calls regardless of track length.
+    """
+    torch, _ = _torch()
+    n = len(track)
+    if n < SEQ_LEN + 1:
+        return pd.DataFrame()
+
+    arr = track[HISTORY_COLUMNS].to_numpy(dtype=np.float64)          # (n, 5)
+    starts = np.arange(0, n - SEQ_LEN, max(stride, 1))
+    if starts.size == 0:
+        return pd.DataFrame()
+    windows = np.stack([arr[s:s + SEQ_LEN] for s in starts])         # (W, 8, 5)
+    truth = arr[starts + SEQ_LEN]                                    # (W, 5)
+
+    frames = [frame_for(w) for w in windows]
+    norm = np.stack([normalize_features(windows[i], frames[i]) for i in range(len(starts))])
+    with torch.no_grad():
+        raw = model(torch.tensor(norm, dtype=torch.float32).to(resolve_device())).cpu().numpy()
+
+    ts_all = None
+    if "timestamp" in track.columns:
+        ts_all = pd.to_datetime(track["timestamp"]).astype("int64").to_numpy() / 1e9  # seconds
+
     rows = []
-    has_time = "timestamp" in track.columns
-    for start in range(0, len(track) - SEQ_LEN, stride):
-        window = track.iloc[start:start + SEQ_LEN]
-        truth = track.iloc[start + SEQ_LEN]
-        assessment = assess_inputs(window)
-        if not assessment.usable:
-            continue
-        pred = predict_next_position(
-            model, window,
-            actual_next={"latitude": float(truth["latitude"]),
-                         "longitude": float(truth["longitude"])},
-            strict=False,
-        )
+    for i, s in enumerate(starts):
+        lat_p, lon_p = denorm_latlon(raw[i, 0], raw[i, 1], frames[i])
+        centroid = (float(np.mean(windows[i][:, 0])), float(np.mean(windows[i][:, 1])))
+        conf = "nominal" if in_aoi(*centroid) else "degraded"
         gap_s = cadence_s = float("nan")
         coverage_gap = False
-        if has_time:
-            ts = pd.to_datetime(window["timestamp"])
-            cadence_s = float(ts.diff().dt.total_seconds().median())
-            gap_s = float((pd.to_datetime(truth["timestamp"]) - ts.iloc[-1]).total_seconds())
+        if ts_all is not None:
+            w_ts = ts_all[s:s + SEQ_LEN]
+            cadence_s = float(np.median(np.diff(w_ts))) if SEQ_LEN > 1 else float("nan")
+            gap_s = float(ts_all[s + SEQ_LEN] - w_ts[-1])
             if np.isfinite(cadence_s) and cadence_s > 0:
                 coverage_gap = gap_s > COVERAGE_GAP_FACTOR * max(cadence_s, 5.0)
+                if cadence_s > 2.5 * TRAJ_NOMINAL_INTERVAL_S:
+                    conf = "degraded"
         rows.append({
-            "index": int(start + SEQ_LEN),
-            "actual_lat": float(truth["latitude"]), "actual_lon": float(truth["longitude"]),
-            "pred_lat": pred.predicted_lat, "pred_lon": pred.predicted_lon,
-            "deviation_km": pred.deviation_km, "confidence": assessment.confidence,
+            "index": int(s + SEQ_LEN),
+            "actual_lat": float(truth[i, 0]), "actual_lon": float(truth[i, 1]),
+            "pred_lat": lat_p, "pred_lon": lon_p,
+            "deviation_km": haversine_km(lat_p, lon_p, float(truth[i, 0]), float(truth[i, 1])),
+            "confidence": conf,
             "gap_s": gap_s, "cadence_s": cadence_s, "coverage_gap": coverage_gap,
         })
     return pd.DataFrame(rows)
@@ -358,7 +378,7 @@ def route_deviation_score(model, track_df: pd.DataFrame) -> tuple[float, Dict[st
     if track_df is None or len(track_df) < SEQ_LEN + 1:
         return 0.0, {"usable": False, "finding": "fewer than 9 pings - LSTM needs an 8-ping window plus a truth ping"}
 
-    trace = rolling_predictions(model, track_df)
+    trace = rolling_predictions(model, track_df)      # batched - stride 1 is cheap
     if trace.empty:
         return 0.0, {"usable": False, "finding": "no window passed the LSTM operating envelope (likely out of the Mauritius AOI)"}
 

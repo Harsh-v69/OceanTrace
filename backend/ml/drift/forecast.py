@@ -89,6 +89,16 @@ def coastal_impact(times, lat_t, lon_t, beached, beach_time, land) -> dict:
     eta = float(np.nanmin(bt)) if valid.any() else max_h
     frac = float(np.mean(beached))
     j = np.nonzero(beached)[0]
+
+    # the first parcel to strand = the earliest / most specific shoreline contact
+    first_j = int(j[np.nanargmin(bt[j])]) if valid.any() else int(j[0])
+    first_contact = [round(float(lat_t[-1][first_j]), 5), round(float(lon_t[-1][first_j]), 5)]
+
+    # a decimated set of stranding coordinates for the map (<= 40 points)
+    take = j if j.size <= 40 else j[np.linspace(0, j.size - 1, 40).astype(int)]
+    contact_points = [
+        [round(float(lat_t[-1][p]), 5), round(float(lon_t[-1][p]), 5)] for p in take
+    ]
     return {
         "will_beach": True,
         "eta_hours": round(eta, 2),
@@ -98,7 +108,11 @@ def coastal_impact(times, lat_t, lon_t, beached, beach_time, land) -> dict:
             round(float(np.mean(lat_t[-1][j])), 5),
             round(float(np.mean(lon_t[-1][j])), 5),
         ],
-        "note": (f"Shoreline contact in {eta:.1f} h; "
+        "first_contact_point": first_contact,
+        "first_contact_eta_h": round(float(np.nanmin(bt[j])), 2) if valid.any() else round(max_h, 2),
+        "contact_points": contact_points,
+        "note": (f"Shoreline contact in {eta:.1f} h at "
+                 f"{first_contact[0]:.3f}, {first_contact[1]:.3f}; "
                  f"{100 * frac:.0f}% of the modelled oil strands within {max_h:.0f} h"),
     }
 

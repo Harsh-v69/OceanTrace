@@ -34,22 +34,40 @@ export function makeMap(el, opts = {}) {
     className: dark ? "tiles-dark" : "",
   });
 
-  let failed = 0;
+  let failed = 0, fellBack = false;
   tiles.on("tileerror", () => {
     failed += 1;
-    if (failed === 4) {
-      map.removeLayer(tiles);
-      el.classList.add("no-tiles");
-      L.rectangle([[-60, -200], [75, 200]], {
-        stroke: false, fillColor: dark ? "#0d2036" : "#dbeafe", fillOpacity: 1,
-      }).addTo(map);
-    }
+    if (failed === 4 && !fellBack) { fellBack = true; offlineBasemap(map, el, dark); }
   });
+  tiles.on("tileload", () => { failed = 0; });
   tiles.addTo(map);
 
   // let the container settle before Leaflet measures it
   setTimeout(() => map.invalidateSize(), 60);
   return map;
+}
+
+/* Epic 2.4: when OSM tiles cannot load, draw the bundled simplified India
+   coastline as a vector layer so the map still shows a recognisable outline. */
+let _coastlineCache = null;
+async function offlineBasemap(map, el, dark) {
+  el.classList.add("no-tiles");
+  map.eachLayer((lyr) => { if (lyr instanceof L.TileLayer) map.removeLayer(lyr); });
+  L.rectangle([[-60, -200], [75, 200]], {
+    stroke: false, fillColor: dark ? "#0b1a2b" : "#dbeafe", fillOpacity: 1, interactive: false,
+  }).addTo(map);
+  try {
+    if (!_coastlineCache) {
+      _coastlineCache = await (await fetch("data/coastline_in.geojson")).json();
+    }
+    L.geoJSON(_coastlineCache, {
+      style: {
+        color: dark ? "#3a5372" : "#7d9bbd", weight: 1,
+        fillColor: dark ? "#152a40" : "#eaf1f8", fillOpacity: 1,
+      },
+      interactive: false,
+    }).addTo(map);
+  } catch { /* no coastline file - the plain ocean canvas is the fallback */ }
 }
 
 const CONF_COLOR = (c) => (c >= 0.75 ? "#ff6b6b" : c >= 0.5 ? "#f0b429" : "#66c2ff");
@@ -85,6 +103,23 @@ export function trackLine(map, points, opts = {}) {
     color: opts.color || "#2ea6ff", weight: opts.weight || 2,
     opacity: opts.opacity ?? 0.8, dashArray: opts.dash || null,
   }).addTo(map);
+}
+
+export function shorelineContact(map, coastalImpact) {
+  if (!coastalImpact || !coastalImpact.will_beach) return null;
+  const g = L.layerGroup().addTo(map);
+  for (const p of (coastalImpact.contact_points || [])) {
+    L.circleMarker(p, { radius: 3, color: "#ff6b6b", weight: 0, fillOpacity: 0.6 }).addTo(g);
+  }
+  const fc = coastalImpact.first_contact_point;
+  if (fc) {
+    L.circleMarker(fc, { radius: 7, color: "#ff3b3b", weight: 2, fillOpacity: 0.25 })
+      .addTo(g)
+      .bindPopup(`<b>First shoreline contact</b><br>ETA ${coastalImpact.first_contact_eta_h ?? coastalImpact.eta_hours} h`
+        + `<br><span class="mono">${fc[0].toFixed(3)}, ${fc[1].toFixed(3)}</span>`
+        + `<br>${Math.round((coastalImpact.fraction_beached || 0) * 100)}% of the modelled oil strands`);
+  }
+  return g;
 }
 
 export function polygon(map, ring, opts = {}) {

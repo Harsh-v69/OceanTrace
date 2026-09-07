@@ -107,6 +107,14 @@ class LandMask:
             if merged is not None and buffer_km:
                 merged = merged.buffer(buffer_km / 111.0)  # deg approx
             self._geom = merged
+            if merged is not None:
+                # one-time spatial index so repeated per-step point tests over a
+                # detailed coastline stay cheap (Epic 2.1).
+                try:
+                    shapely.prepare(merged)
+                    self._bounds = merged.bounds
+                except Exception:  # noqa: BLE001
+                    self._bounds = None
 
         self._raster = None if raster is None else np.asarray(raster, bool)
         self._gt = transform
@@ -123,8 +131,17 @@ class LandMask:
         out = np.zeros(lat.shape, bool)
 
         if self._geom is not None and _HAVE_SHAPELY:
-            pts = shapely.points(lon, lat)
-            out |= shapely.contains(self._geom, pts)
+            # bbox pre-filter: only test parcels that could possibly be ashore
+            b = getattr(self, "_bounds", None)
+            if b is not None:
+                cand = (lon >= b[0]) & (lat >= b[1]) & (lon <= b[2]) & (lat <= b[3])
+            else:
+                cand = np.ones(lat.shape, bool)
+            if cand.any():
+                pts = shapely.points(lon[cand], lat[cand])
+                hit = np.zeros(lat.shape, bool)
+                hit[cand] = shapely.contains(self._geom, pts)
+                out |= hit
 
         if self._raster is not None and self._gt is not None:
             col, row = self._gt.ll_to_pixel(lat, lon)

@@ -8,8 +8,7 @@ oil-spill detection + AIS vessel attribution.
 
 > Phases 1–9 delivered the prototype. A follow-on issues backlog is being worked
 > as **Epics** (see §7). Epic 1 (RBAC, hierarchical user management, vessel
-> tracking, OceanTrace rebrand) is **complete**; Epic 2 is **partial** (LSTM
-> unlock + dwell/weights done; coastline-dependent items deferred).
+> tracking, OceanTrace rebrand) is **complete**; Epic 2 is **complete** (LSTM unlock, dwell/weights, land collision, offline basemap).
 
 ---
 
@@ -121,44 +120,36 @@ resident** until an investigation needs them; thereafter each stays cached in
 memory for the life of the process. A session that only browses the map / lists
 / dossiers never imports torch.
 
-### 4.2 Per-stage timings (warm mean, milliseconds)
+### 4.2 Per-stage timings (warm mean, milliseconds — after Epic 2)
 
 | scenario | ingest | preproc | detect | charac | hindcast+fcst | AIS | fusion | juris | alert | **total** |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| mumbai-high-confidence | 20 | 90 | 397 | 84 | 1314 | 596 | 3376 | 2 | 9 | **5924** |
-| lookalike-darkpatch | 19 | 87 | 334 | 65 | 0 | 0 | 0 | 3 | 0 | **512** |
-| ambiguous-drift | 21 | 99 | 456 | 100 | 1436 | 839 | 4751 | 3 | 9 | **7751** |
-| wakashio-mauritius | 21 | 83 | 249 | 25 | 1356 | 1896 | 10741 | 3 | 9 | **14432** |
+| mumbai-high-confidence | 12 | 52 | 214 | 41 | 687 | 169 | 959 | 1 | 4 | **2210** |
+| lookalike-darkpatch | 11 | 46 | 187 | 34 | 0 | 0 | 0 | 1 | 0 | **286** |
+| ambiguous-drift | 10 | 56 | 243 | 53 | 676 | 184 | 1045 | 1 | 4 | **2342** |
+| wakashio-mauritius | 18 | 75 | 277 | 30 | 1012 | 313 | 1772 | 1 | 12 | **3658** |
 
-Run-to-run variance on `attribution_fusion` is ±5–8 % (numpy threading).
-Cold (first run of a process, model load folded in): mumbai ~14 s, lookalike
-~0.55 s, ambiguous ~7.6 s, wakashio ~15.9 s.
+Cold (first run of a process, model load folded in): mumbai ~4.8 s, lookalike
+~0.3 s, ambiguous ~2.3 s, wakashio ~2.4 s.
 
 ### 4.3 Assessment against latency budgets
 
 | Class of operation | Budget | Measured | Verdict |
 |---|---|---|---|
 | Interactive endpoints (auth, health, jurisdictions, lists, investigation read, dossier JSON/MD/HTML) | < 1.5 s | all sub-second (covered by the test suite) | **OK** |
-| Look-alike rejection (short-circuit) | < 1 s | 0.57 s | **OK** |
-| Typical full investigation (SAR + drift feedback + fusion) | ≤ 10 s | 5.9–7.8 s | **OK** |
-| Heaviest forensic scenario (Wakashio) | ≤ 20 s | 14.4 s | **OK** |
+| Look-alike rejection (short-circuit) | < 1 s | 0.29 s | **OK** |
+| Typical full investigation (SAR + drift feedback + fusion) | ≤ 10 s | 2.2–2.3 s | **OK** |
+| Heaviest forensic scenario (Wakashio) | ≤ 20 s | 3.7 s | **OK** |
 
-**Where the time goes.** For a full investigation, `attribution_fusion`
-dominates. It runs the unified 7-component scorer *and* the release-time
-feedback loop, which re-runs the RK4 hindcast once per iteration
-(`max_iterations=2`, `n_particles=280`). Wakashio is the outlier because its
-culprit is a two-segment continuous-release track (approach + grounding) at 60 s
-AIS cadence over ~16 h — the longest track and the longest back-tracking
-interval of any scenario. The spatiotemporal volume search was vectorised in
-Phase 9 (bit-identical results, ~10× faster on long tracks); the residual cost
-is the repeated physics hindcasts, which is inherent to the feedback method and
-is the price of moving the origin error from ~30 km (physics only) to ~3 km
-(AIS-constrained).
-
-A full investigation is a **triggered batch job with a live progress UI** (the
-Live Monitoring view animates each stage as it completes), not a blocking
-request, so single-digit-to-~15 s on one core with no GPU is within an
-acceptable budget for this prototype. No GPU is required anywhere.
+**Epic 2 made the pipeline faster.** Rewriting `rolling_predictions` to push
+every 8-ping LSTM window through the model in **one batched forward pass** (from
+a per-window Python loop with per-window `assess_inputs` / pandas slicing) cut
+`attribution_fusion` roughly 3×, more than paying for the newly-enabled
+route-deviation signal on the Indian scenarios *and* the RK4 land-collision test
+per particle-step (kept cheap with a `shapely.prepare`d coastline + a bounding-box
+pre-filter). The Wakashio scenario — the heaviest, a two-segment continuous-release
+grounding track at 60 s AIS cadence over ~16 h — dropped from ~14 s to ~3.7 s
+warm. No GPU is required anywhere.
 
 ---
 
@@ -216,36 +207,33 @@ $ python scripts/acceptance.py  →  26/26 checkpoints passed
 Acceptance grew from 24 → 26 (open-registration-closed + hierarchical creation;
 vessel-tracking engine; REGIONAL-scoped management). `test_acceptance.py` updated.
 
-### Epic 2 — drift/attribution accuracy — **PARTIAL** (2026-09-07)
-
-Items 2.1 (coastline + land collision) and 2.4 (offline vector basemap) are
-**deferred** — both need an Indian coastline GeoJSON that cannot be fetched
-offline. Items 2.2 and 2.3 are done:
+### Epic 2 — drift/attribution accuracy + coastline — **COMPLETE** (2026-09-07)
 
 | Item | What shipped |
 |---|---|
-| **2.2 LSTM route deviation unlocked** | `assess_inputs` no longer hard-blocks outside the Mauritius AOI (`AOI_HARD_GATE=False`). `normalize_features`/`denorm_latlon` take a `frame=(lat0,lon0,lat_span,lon_span)`; `frame_for(window)` uses the fixed AOI frame inside the AOI (bit-identical to before) and the **same span recentred on the window centroid** outside it, so the pre-trained LSTM extrapolates anywhere. Out-of-AOI results are flagged `confidence="degraded"`, `aoi=False`, and carry a caveat ("the 0.37 km published accuracy does not apply"). The Indian scenarios now get a real `route_deviation` component (~1–4 fused points) instead of 0. |
-| **2.3 Dwell + exact fusion weights** | `FusionWeights` is now the exact operating spec — spatiotemporal 0.30, axis 0.18, CPA 0.14, **dwell 0.10**, blackout 0.10, route‑deviation 0.09, vessel‑prior 0.09 (Σ = 1.00). The POSEatSea `dwell` term (share of the vessel's own observed time inside the search radius) is wired into `fuse_attribution` as a first-class component. `ais_anomaly` is still **computed and shown** as transparent evidence in every ranking/dossier but is **not weighted** (weight 0) — it flags a vessel for review, it does not move the score. |
+| **2.1 Coastline + RK4 land collision** | A supplied India admin boundary (6.6 MB, git-ignored) is simplified once (`shapely.simplify` tol 0.01° ≈ 1.1 km → `backend/static/data/coastline_in.geojson`, 167 KB) and loaded as a `LandMask` (`services/drift.load_indian_coastline()`, cached, `shapely.prepare`d + bbox pre-filter). The orchestrator passes it into both `run_hindcast` and `run_forecast`. `coastal_impact` now returns `first_contact_point`, `first_contact_eta_h`, and a decimated `contact_points` list alongside `fraction_beached`. The Mumbai scenario beaches on the Maharashtra coast in ~17 h; the offshore scenario does not. Shown on the Workstation & Drift maps (red stranding markers + a first-contact popup) and in a new dossier section `forward_forecast.shoreline_contact`. |
+| **2.2 LSTM route deviation unlocked** | `AOI_HARD_GATE=False`. `normalize_features`/`denorm_latlon` take a `frame=(lat0,lon0,lat_span,lon_span)`; `frame_for(window)` keeps the fixed AOI frame inside the Mauritius AOI (bit-identical to before) and recentres the **same span** on the window centroid outside it, so the pre-trained LSTM extrapolates anywhere. Out-of-AOI results carry `confidence="degraded"`, `aoi=False`, and a caveat. `rolling_predictions` was rewritten to **batch every 8-ping window through the LSTM in one forward pass** — the Indian scenarios now get a real `route_deviation` component *and the pipeline got ~3× faster* (see §4.3). |
+| **2.3 Dwell + exact fusion weights** | `FusionWeights` = the exact operating spec — spatiotemporal 0.30, axis 0.18, CPA 0.14, **dwell 0.10**, blackout 0.10, route‑deviation 0.09, vessel‑prior 0.09 (Σ 1.00). The POSEatSea `dwell` term is a first-class component. `ais_anomaly` is still **computed and shown** as evidence in every ranking/dossier but is **not weighted** (weight 0). |
+| **2.4 Offline vector basemap** | When OSM tiles fail (no internet), `map.js` now fetches `data/coastline_in.geojson` and renders it as an `L.geoJSON` land layer so the map still shows a recognisable India outline instead of a blank canvas. |
 
-All 4 scenarios still rank their true culprit #1. Tests updated:
-`test_attribution_ai.py` (AOI gate → degraded flag, 8th component), `test_e2e_workflow.py`.
+All 4 scenarios still rank their true culprit #1. New: `test_coastline.py` (5 tests).
+Updated: `test_attribution_ai.py`, `test_drift.py`, `test_e2e_workflow.py`.
 
 ```
-$ python -m pytest -q          →  221 passed
+$ python -m pytest -q          →  225 passed  (~108 s, faster than before)
 $ python scripts/acceptance.py  →  26/26 checkpoints passed
 ```
 
-**Deferred / queued:** Epic 2.1 + 2.4 (need a coastline dataset); Epic 3 (Twilio
-account, Copernicus CDS key); Epic 4 (a PostGIS instance) — all for full
-verification.
+**Queued:** Epic 3 (Twilio account, Copernicus CDS key); Epic 4 (a PostGIS
+instance) — both for full verification.
 
 ---
 
 ## 8. Sign-off
 
-Phases 1–9 **PASSED**, Epic 1 **COMPLETE**, Epic 2 **PARTIAL** (2.2 + 2.3 done;
-2.1 + 2.4 deferred on a coastline dataset). **221/221** automated tests green.
-**26/26** acceptance checkpoints green. Lazy-loading verified. Performance within
-tiered budgets on a single CPU core with no GPU and no network.
+Phases 1–9 **PASSED**; Epic 1 and Epic 2 **COMPLETE**. **225/225** automated
+tests green. **26/26** acceptance checkpoints green. Lazy-loading verified.
+Performance within tiered budgets on a single CPU core with no GPU and no network
+(Epic 2 made the pipeline ~3× faster — see §4.3).
 
 See `docs/DEPLOYMENT.md` for run and demo instructions.

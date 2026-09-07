@@ -1,11 +1,11 @@
 /* All screens for the Operations Console. Each view renders into ctx.root and
    wires its own events. ctx = { user, root, go, toast }. */
 
-import { api, fetchText } from "./api.js?v=epic1";
+import { api, fetchText } from "./api.js?v=epic2";
 import {
   makeMap, anomalyMarker, vesselMarker, trackLine, polygon, fit, L,
-  vesselTrackLayer, vesselPopupHtml,
-} from "./map.js?v=epic1";
+  vesselTrackLayer, vesselPopupHtml, shorelineContact,
+} from "./map.js?v=epic2";
 
 /* -------------------------------------------------------------- helpers -- */
 const h = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -306,7 +306,16 @@ async function workstation(ctx, params) {
                 <td>${num(hz.mean_radius_km, 1)} km</td>
                 <td>${hz.fraction_beached ? pct(hz.fraction_beached) : "-"}</td></tr>`).join("")}</tbody></table>`
             : `<p class="muted">Not computed (look-alike scene).</p>`
-        }<p class="muted">${h(m.environmental_field?.label || "")}</p></div>
+        }${(() => {
+          const ci = fore.coastal_impact || {};
+          if (!ci.will_beach) return `<p class="muted">${h(ci.note || "No shoreline contact modelled.")}</p>`;
+          const fc = ci.first_contact_point || [];
+          return `<h3>Shoreline contact</h3>${kv([
+            ["First landfall ETA", `${num(ci.first_contact_eta_h ?? ci.eta_hours, 1)} h`],
+            ["Contact point", `<span class="mono">${num(fc[0], 3)}, ${num(fc[1], 3)}</span>`],
+            ["Oil ashore (48 h)", pct(ci.fraction_beached)],
+          ])}`;
+        })()}<p class="muted">${h(m.environmental_field?.label || "")}</p></div>
       </div>
       <div class="wcol">
         <div class="panel"><h2>Ranked candidate vessels</h2>
@@ -330,6 +339,8 @@ async function workstation(ctx, params) {
     layers.push(polygon(map, hind.release_polygon, { color: "#35d07f", lonlat: guessLonLat(hind.release_polygon) }));
   if (hind.confidence_ellipse?.length)
     polygon(map, hind.confidence_ellipse, { color: "#66c2ff", fillOpacity: 0.05, lonlat: guessLonLat(hind.confidence_ellipse) });
+  const beachLayer = shorelineContact(map, fore.coastal_impact);
+  if (beachLayer) layers.push(beachLayer);
 
   // vessels: reconstructed track per candidate (prime in red), clickable
   const vts = m.vessel_tracks || {};
@@ -521,10 +532,19 @@ async function driftForecast(ctx, params) {
               <td>${num(hz.mean_radius_km, 1)} km</td>
               <td>${hz.fraction_beached ? pct(hz.fraction_beached) : "-"}</td></tr>`).join("")}</tbody></table>`
             : `<p class="muted">n/a</p>`
-        }<h3>Coastal impact</h3>${kv([
-          ["Will beach", fore.coastal_impact?.will_beach ? "yes" : "no"],
-          ["Note", h(fore.coastal_impact?.note || "-")],
-        ])}</div>
+        }<h3>Coastal impact</h3>${(() => {
+          const ci = fore.coastal_impact || {};
+          const rows = [["Will beach", ci.will_beach ? "yes" : "no"]];
+          if (ci.will_beach) {
+            const fc = ci.first_contact_point || [];
+            rows.push(["First landfall ETA", `${num(ci.first_contact_eta_h ?? ci.eta_hours, 1)} h`]);
+            rows.push(["Contact point", `<span class="mono">${num(fc[0], 3)}, ${num(fc[1], 3)}</span>`]);
+            rows.push(["Oil ashore (48 h)", pct(ci.fraction_beached)]);
+          } else {
+            rows.push(["Note", h(ci.note || "-")]);
+          }
+          return kv(rows);
+        })()}</div>
       </div>
       <div class="panel"><h2>Met-ocean field</h2><p class="muted">${h(m.environmental_field?.label || "")}</p>${kv([
         ["Mean current", `${num(mo.current_speed_ms ?? mo.current_ms, 2)} m/s @ ${num(mo.current_dir_deg, 0)}&deg;`],
@@ -551,6 +571,8 @@ async function driftForecast(ctx, params) {
     const fc = (fr.forecast || []).map((f) => meanPoint(f.points)).filter(Boolean);
     if (hc.length > 1) trackLine(map, hc, { color: "#f0b429", dash: "5 4" });
     if (fc.length > 1) trackLine(map, fc, { color: "#2ea6ff" });
+    const bl = shorelineContact(map, fore.coastal_impact);
+    if (bl) layers.push(bl);
     if (layers.length) fit(map, layers);
   }
   $("#df-inv").addEventListener("change", (e) => render(e.target.value));

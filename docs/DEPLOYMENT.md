@@ -62,6 +62,8 @@ default; the demo runs with **no `.env` at all**.
 | `ALERT_CONFIDENCE_THRESHOLD` | `0.75` | minimum SAR confidence that raises an alert |
 | `ML_LAZY_LOAD` | `true` | keep models unloaded until first use |
 | `SEED_DEMO_JURISDICTIONS` | `true` | seed the 14 Indian maritime zones at startup |
+| `SEED_DEFAULT_USERS` | `true` | seed one account per role — `national@` / `regional@` / `pilot@oceantrace.gov.in`, password `DEFAULT_USER_PASSWORD` |
+| `ALLOW_OPEN_REGISTRATION` | `false` | keep open self-registration off; admins create users via `POST /users` |
 
 ---
 
@@ -175,8 +177,8 @@ Every run is byte-for-byte repeatable and each returns a
 ## 7. Verification
 
 ```bash
-python -m pytest -q                 # 197 passed
-python scripts/acceptance.py        # 24/24 checkpoints passed
+python -m pytest -q                 # 225 passed
+python scripts/acceptance.py        # 26/26 checkpoints passed
 python scripts/profile_pipeline.py  # per-stage timings + lazy-load report
 ```
 

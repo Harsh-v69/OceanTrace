@@ -26,3 +26,4 @@ data/metocean_cache/
 Thumbs.db
 .idea/
 .vscode/
+backend/static/data/indian_coastline.geojson
