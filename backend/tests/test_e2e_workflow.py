@@ -114,7 +114,7 @@ def test_full_lifecycle_pilot_mumbai(client, sms_mock):
     # the fusion score is transparent: components are exposed per candidate
     prime = m["attribution"]["candidates"][0]
     assert set(prime["components"]) >= {
-        "spatiotemporal", "axis_alignment", "proximity",
+        "spatiotemporal", "axis_alignment", "proximity", "dwell",
         "blackout", "ais_anomaly", "route_deviation", "vessel_prior",
     }
 

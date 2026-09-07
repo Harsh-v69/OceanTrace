@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 
 from backend.ml.trajectory.config import (
+    AOI_HARD_GATE,
     COVERAGE_GAP_FACTOR,
     DEVIATION_SCORE_SCALE_KM,
     LAT_MAX,
@@ -31,6 +32,8 @@ from backend.ml.trajectory.config import (
     LON_MIN,
     SEQ_LEN,
     SPEED_MAX,
+    TRAIN_LAT_SPAN,
+    TRAIN_LON_SPAN,
     TRAJ_HIDDEN_DIM,
     TRAJ_INPUT_DIM,
     TRAJ_MEAN_ERROR_KM,
@@ -42,6 +45,8 @@ from backend.ml.trajectory.config import (
     TRAJECTORY_WEIGHTS,
     resolve_device,
 )
+
+_AOI_MID = ((LAT_MIN + LAT_MAX) / 2.0, (LON_MIN + LON_MAX) / 2.0)
 
 HISTORY_COLUMNS = ["latitude", "longitude", "speed", "course", "rot"]
 
@@ -85,13 +90,34 @@ def load_model(weights_path=None):
 
 
 # --------------------------------------------------------------------------- #
-# Normalisation - constants must match training exactly
+# Normalisation
+#
+# The model was trained on coordinates scaled by the fixed Mauritius AOI box.
+# Epic 2.2 keeps the same *span* but recentres it on the analysed window so the
+# LSTM can run anywhere. ``frame = (lat0, lon0, lat_span, lon_span)`` maps
+# ``lat0 -> 0.5``; with the AOI-centre frame this is bit-identical to the
+# original ``(x - MIN) / (MAX - MIN)`` mapping.
 # --------------------------------------------------------------------------- #
-def normalize_features(seq: np.ndarray) -> np.ndarray:
+def _aoi_frame() -> tuple[float, float, float, float]:
+    return (_AOI_MID[0], _AOI_MID[1], TRAIN_LAT_SPAN, TRAIN_LON_SPAN)
+
+
+def frame_for(seq: np.ndarray) -> tuple[float, float, float, float]:
+    """Normalisation frame for a window: the fixed AOI frame when the window's
+    centroid is inside the training AOI, otherwise the same span recentred on it."""
+    lat0 = float(np.mean(seq[..., 0]))
+    lon0 = float(np.mean(seq[..., 1]))
+    if in_aoi(lat0, lon0):
+        return _aoi_frame()
+    return (lat0, lon0, TRAIN_LAT_SPAN, TRAIN_LON_SPAN)
+
+
+def normalize_features(seq: np.ndarray, frame: tuple | None = None) -> np.ndarray:
     """(..., 5) of (lat, lon, speed, course, rot) -> (..., 6) model input."""
+    lat0, lon0, lat_span, lon_span = frame or _aoi_frame()
     out = seq.copy().astype(np.float32)
-    out[..., 0] = (seq[..., 0] - LAT_MIN) / (LAT_MAX - LAT_MIN + 1e-9)
-    out[..., 1] = (seq[..., 1] - LON_MIN) / (LON_MAX - LON_MIN + 1e-9)
+    out[..., 0] = (seq[..., 0] - lat0) / (lat_span + 1e-9) + 0.5
+    out[..., 1] = (seq[..., 1] - lon0) / (lon_span + 1e-9) + 0.5
     out[..., 2] = np.clip(seq[..., 2], 0, SPEED_MAX) / SPEED_MAX
     course_rad = np.radians(seq[..., 3])
     sin_c, cos_c = np.sin(course_rad), np.cos(course_rad)
@@ -101,9 +127,10 @@ def normalize_features(seq: np.ndarray) -> np.ndarray:
     )
 
 
-def denorm_latlon(lat_norm: float, lon_norm: float):
-    return (float(lat_norm) * (LAT_MAX - LAT_MIN) + LAT_MIN,
-            float(lon_norm) * (LON_MAX - LON_MIN) + LON_MIN)
+def denorm_latlon(lat_norm: float, lon_norm: float, frame: tuple | None = None):
+    lat0, lon0, lat_span, lon_span = frame or _aoi_frame()
+    return (float(lat_norm - 0.5) * lat_span + lat0,
+            float(lon_norm - 0.5) * lon_span + lon0)
 
 
 def haversine_km(lat1, lon1, lat2, lon2) -> float:
@@ -163,13 +190,18 @@ def assess_inputs(history: pd.DataFrame) -> InputAssessment:
         (float(r.latitude), float(r.longitude))
         for r in history.itertuples() if not in_aoi(float(r.latitude), float(r.longitude))
     ]
-    if outside:
-        blockers.append(
-            f"{len(outside)} of {SEQ_LEN} pings fall outside the Mauritius AOI the model "
-            f"was normalised for; predictions there are not meaningful."
-        )
-
     confidence = "nominal"
+    if outside:
+        msg = (
+            f"{len(outside)} of {SEQ_LEN} pings are outside the Mauritius AOI the model was "
+            f"trained on; the window is renormalised locally and the route-deviation score "
+            f"is an unvalidated extrapolation (published 0.37 km error does not apply here)."
+        )
+        if AOI_HARD_GATE:
+            blockers.append(msg)
+            return InputAssessment(False, warnings_, blockers, "unreliable")
+        warnings_.append(msg)
+        confidence = "degraded"
     if "timestamp" in history.columns:
         ts = pd.to_datetime(history["timestamp"])
         gaps = ts.diff().dt.total_seconds().dropna()
@@ -258,10 +290,11 @@ def predict_next_position(model, history: pd.DataFrame,
         raise ValueError(" ".join(assessment.blockers))
 
     seq = history[HISTORY_COLUMNS].to_numpy(dtype=np.float64)[None, ...]
-    x = torch.tensor(normalize_features(seq), dtype=torch.float32).to(resolve_device())
+    frame = frame_for(seq[0])
+    x = torch.tensor(normalize_features(seq, frame), dtype=torch.float32).to(resolve_device())
     with torch.no_grad():
         pred = model(x).cpu().numpy()
-    lat, lon = denorm_latlon(pred[0, 0], pred[0, 1])
+    lat, lon = denorm_latlon(pred[0, 0], pred[0, 1], frame)
 
     last = history.iloc[-1]
     return TrajectoryPrediction(
@@ -336,17 +369,26 @@ def route_deviation_score(model, track_df: pd.DataFrame) -> tuple[float, Dict[st
     median_dev = float(dev.median())
     score = float(np.clip(max_dev / DEVIATION_SCORE_SCALE_KM, 0.0, 1.0))
     degraded = bool((used["confidence"] == "degraded").mean() > 0.5)
-    return score, {
+    in_region = bool(in_aoi(float(track_df["latitude"].mean()), float(track_df["longitude"].mean())))
+    detail = {
         "usable": True,
+        "aoi": in_region,
         "windows_scored": int(len(used)),
         "max_deviation_km": round(max_dev, 3),
         "median_deviation_km": round(median_dev, 3),
         "p90_reference_km": TRAJ_P90_ERROR_KM,
-        "confidence": "degraded" if degraded else "nominal",
+        "confidence": "nominal" if (in_region and not degraded) else "degraded",
         "coverage_gaps_excluded": int(len(trace) - len(clean)),
         "finding": (f"Peak departure from the predicted track was {max_dev:.2f} km "
-                    f"(model p90 held-out error {TRAJ_P90_ERROR_KM} km)."),
+                    f"(model p90 held-out error {TRAJ_P90_ERROR_KM} km)."
+                    + ("" if in_region else
+                       " Outside the Mauritius training AOI - locally renormalised, "
+                       "treat as an indicative extrapolation.")),
     }
+    if not in_region:
+        detail["caveat"] = ("Route-deviation extrapolated outside the model's training "
+                            "region; the 0.37 km published accuracy does not apply.")
+    return score, detail
 
 
 def model_card() -> Dict[str, Any]:

@@ -23,6 +23,16 @@ LON_MAX = 58.37872
 SPEED_MAX = 19.3                 # 99.9th pct of training speed; input clip ceiling
 SEQ_LEN = 8                      # the model consumes exactly 8 pings
 
+# The lat/lon *span* the model was normalised against. Epic 2.2 keeps this scale
+# but recentres it on each 8-ping window's centroid, so the pre-trained LSTM can
+# evaluate route deviations anywhere - inside the Mauritius AOI the recentred
+# frame is identical to the original fixed frame; outside it, the prediction is a
+# translation-invariant *extrapolation* and is flagged ``confidence="degraded"``
+# (its published 0.37 km error only holds inside the training AOI).
+TRAIN_LAT_SPAN = LAT_MAX - LAT_MIN
+TRAIN_LON_SPAN = LON_MAX - LON_MIN
+AOI_HARD_GATE = False           # Epic 2.2: no longer a hard blocker, only a confidence downgrade
+
 TRAJ_INPUT_DIM = 6
 TRAJ_HIDDEN_DIM = 128
 TRAJ_NUM_LAYERS = 2

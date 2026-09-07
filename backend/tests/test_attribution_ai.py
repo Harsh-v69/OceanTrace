@@ -202,12 +202,16 @@ def test_assess_inputs_gates_bad_windows(lstm):
     short = mauritius_history(n=5)
     assert not assess_inputs(short).usable
 
+    # Epic 2.2: outside the Mauritius AOI the window is still USABLE (locally
+    # renormalised) but its confidence is downgraded and a caveat is attached.
     off = mauritius_history()
     off["latitude"] = 19.0
     off["longitude"] = 70.0
     a = assess_inputs(off)
-    assert not a.usable
-    assert any("AOI" in b for b in a.blockers)
+    assert a.usable is True
+    assert a.confidence == "degraded"
+    assert any("AOI" in w or "extrapolation" in w for w in a.warnings)
+    assert not a.blockers
 
     ok = assess_inputs(mauritius_history())
     assert ok.usable and ok.confidence == "nominal"
@@ -227,13 +231,18 @@ def test_rolling_predictions_produce_a_deviation_trace(lstm):
     assert (trace["deviation_km"] >= 0).all()
 
 
-def test_route_deviation_score_is_zero_out_of_aoi(lstm):
+def test_route_deviation_score_extrapolates_out_of_aoi(lstm):
+    # Epic 2.2: a Konkan (Indian-coast) track now produces a real, bounded
+    # route-deviation score - flagged as an unvalidated extrapolation.
     df = mauritius_track_df(n=24)
     df["latitude"] = 15.6            # Konkan, not Mauritius
     df["longitude"] = 73.2
     score, detail = route_deviation_score(lstm, df)
-    assert score == 0.0
-    assert detail["usable"] is False
+    assert 0.0 <= score <= 1.0
+    assert detail["usable"] is True
+    assert detail["aoi"] is False
+    assert detail["confidence"] == "degraded"
+    assert "caveat" in detail and "extrapolat" in detail["caveat"].lower()
 
 
 def test_route_deviation_is_higher_after_a_sharp_manoeuvre(lstm):
@@ -252,9 +261,10 @@ def fusion_result():
     return A.fuse_attribution(inv, tracks)
 
 
-def test_fusion_has_seven_components_all_normalised(fusion_result):
+def test_fusion_components_all_normalised(fusion_result):
     families = {"spatiotemporal": "physical", "axis_alignment": "physical",
-                "proximity": "ais", "blackout": "ais", "ais_anomaly": "ais",
+                "proximity": "ais", "dwell": "ais", "blackout": "ais",
+                "ais_anomaly": "ais",
                 "route_deviation": "behavioural", "vessel_prior": "behavioural"}
     for c in fusion_result["candidates"]:
         comp = c["components"]
@@ -262,7 +272,10 @@ def test_fusion_has_seven_components_all_normalised(fusion_result):
         for k, v in comp.items():
             assert 0.0 <= v["value"] <= 1.0, f"{k}={v['value']} not in [0,1]"
             assert v["family"] == families[k]
-        avail = [k for k in comp if comp[k]["available"]]
+        # Epic 2.3: ais_anomaly is computed + shown but NOT weighted
+        assert comp["ais_anomaly"]["weight"] == 0.0
+        assert comp["ais_anomaly"]["points"] == 0.0
+        avail = [k for k in comp if comp[k]["available"] and comp[k]["weight"] > 0]
         assert sum(comp[k]["weight"] for k in avail) == pytest.approx(1.0, abs=3e-3)
         assert 0.0 <= c["score"] <= 100.0
 

@@ -26,7 +26,7 @@ from backend.ml.attribution.config import (
     assessment_band,
 )
 from backend.ml.attribution.geo import haversine_m, initial_bearing_deg
-from backend.ml.attribution.proximity import closest_point_of_approach, cpa_score
+from backend.ml.attribution.proximity import closest_point_of_approach, cpa_score, dwell_fraction
 from backend.ml.attribution.score import score_candidate
 from backend.ml.attribution.spatiotemporal import spatiotemporal_consistency
 
@@ -37,6 +37,7 @@ _EVIDENCE_FAMILY = {
     "spatiotemporal": "physical",
     "axis_alignment": "physical",
     "proximity": "ais",
+    "dwell": "ais",
     "blackout": "ais",
     "ais_anomaly": "ais",
     "route_deviation": "behavioural",
@@ -558,6 +559,15 @@ def _fuse_one(track, ctx, axis_deg, base_w, radius_km, pad_h, gate_on, ae, scale
                     "Vessel never came within the search radius of the origin."),
     }
 
+    s_dw, d_dw = dwell_fraction(track, ctx["origin"][0], ctx["origin"][1],
+                                radius_km=radius_km, window_h=window, pad_h=pad_h)
+    d_dw.setdefault(
+        "finding",
+        (f"Spent {d_dw['minutes_in_radius']:.0f} of {d_dw['observed_minutes']:.0f} "
+         f"observed minutes within {d_dw['radius_km']:.0f} km of the origin."
+         if "minutes_in_radius" in d_dw else "Too little coverage to measure dwell."),
+    )
+
     s_bl, d_bl = _blackout_component(track, window)
     s_an, d_an = _ais_anomaly_component(track, ae, scaler, ctx["origin"], window, radius_km)
     s_rd, d_rd = _route_deviation_component(track, lstm)
@@ -567,6 +577,7 @@ def _fuse_one(track, ctx, axis_deg, base_w, radius_km, pad_h, gate_on, ae, scale
         "spatiotemporal": (float(s_st), d_st, True),
         "axis_alignment": (float(s_ax), d_ax, axis_deg is not None),
         "proximity": (float(s_pr), d_pr, True),
+        "dwell": (float(s_dw), d_dw, True),
         "blackout": (float(s_bl), d_bl, True),
         "ais_anomaly": (float(s_an), d_an, bool(d_an.get("available", True))),
         "route_deviation": (float(s_rd), d_rd, bool(d_rd.get("available") and d_rd.get("usable"))),

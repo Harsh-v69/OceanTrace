@@ -8,7 +8,8 @@ oil-spill detection + AIS vessel attribution.
 
 > Phases 1–9 delivered the prototype. A follow-on issues backlog is being worked
 > as **Epics** (see §7). Epic 1 (RBAC, hierarchical user management, vessel
-> tracking, OceanTrace rebrand) is **complete**.
+> tracking, OceanTrace rebrand) is **complete**; Epic 2 is **partial** (LSTM
+> unlock + dwell/weights done; coastline-dependent items deferred).
 
 ---
 
@@ -215,16 +216,35 @@ $ python scripts/acceptance.py  →  26/26 checkpoints passed
 Acceptance grew from 24 → 26 (open-registration-closed + hierarchical creation;
 vessel-tracking engine; REGIONAL-scoped management). `test_acceptance.py` updated.
 
-**Epics 2–4** (drift accuracy + land collision + offline basemap; real met-ocean
-+ Twilio + upload endpoints; PostGIS + Alembic + weathering) are queued; several
-have external dependencies (coastline dataset, Copernicus CDS key, Twilio
-account, a PostGIS instance) that must be supplied.
+### Epic 2 — drift/attribution accuracy — **PARTIAL** (2026-09-07)
+
+Items 2.1 (coastline + land collision) and 2.4 (offline vector basemap) are
+**deferred** — both need an Indian coastline GeoJSON that cannot be fetched
+offline. Items 2.2 and 2.3 are done:
+
+| Item | What shipped |
+|---|---|
+| **2.2 LSTM route deviation unlocked** | `assess_inputs` no longer hard-blocks outside the Mauritius AOI (`AOI_HARD_GATE=False`). `normalize_features`/`denorm_latlon` take a `frame=(lat0,lon0,lat_span,lon_span)`; `frame_for(window)` uses the fixed AOI frame inside the AOI (bit-identical to before) and the **same span recentred on the window centroid** outside it, so the pre-trained LSTM extrapolates anywhere. Out-of-AOI results are flagged `confidence="degraded"`, `aoi=False`, and carry a caveat ("the 0.37 km published accuracy does not apply"). The Indian scenarios now get a real `route_deviation` component (~1–4 fused points) instead of 0. |
+| **2.3 Dwell + exact fusion weights** | `FusionWeights` is now the exact operating spec — spatiotemporal 0.30, axis 0.18, CPA 0.14, **dwell 0.10**, blackout 0.10, route‑deviation 0.09, vessel‑prior 0.09 (Σ = 1.00). The POSEatSea `dwell` term (share of the vessel's own observed time inside the search radius) is wired into `fuse_attribution` as a first-class component. `ais_anomaly` is still **computed and shown** as transparent evidence in every ranking/dossier but is **not weighted** (weight 0) — it flags a vessel for review, it does not move the score. |
+
+All 4 scenarios still rank their true culprit #1. Tests updated:
+`test_attribution_ai.py` (AOI gate → degraded flag, 8th component), `test_e2e_workflow.py`.
+
+```
+$ python -m pytest -q          →  221 passed
+$ python scripts/acceptance.py  →  26/26 checkpoints passed
+```
+
+**Deferred / queued:** Epic 2.1 + 2.4 (need a coastline dataset); Epic 3 (Twilio
+account, Copernicus CDS key); Epic 4 (a PostGIS instance) — all for full
+verification.
 
 ---
 
 ## 8. Sign-off
 
-Phases 1–9 **PASSED** and Epic 1 **COMPLETE**. **221/221** automated tests green.
+Phases 1–9 **PASSED**, Epic 1 **COMPLETE**, Epic 2 **PARTIAL** (2.2 + 2.3 done;
+2.1 + 2.4 deferred on a coastline dataset). **221/221** automated tests green.
 **26/26** acceptance checkpoints green. Lazy-loading verified. Performance within
 tiered budgets on a single CPU core with no GPU and no network.
 

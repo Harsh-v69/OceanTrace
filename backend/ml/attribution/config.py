@@ -38,21 +38,26 @@ class AttributionWeights(_WeightsMixin):
 @dataclass(frozen=True)
 class FusionWeights(_WeightsMixin):
     """
-    Phase-6 UNIFIED FUSION weights. Physical + AIS + behavioural evidence.
-    Configure centrally; every component is normalised to [0, 1] before weighting
-    and the weights are renormalised over whatever components are available.
+    UNIFIED FUSION weights (Epic 2.3 - the exact operating spec). Physical + AIS
+    + behavioural evidence; every component is normalised to [0, 1] before
+    weighting and the weights are renormalised over whatever components are
+    available for a given vessel. Sum = 1.00.
+
+    Note: the AIS autoencoder (``ais_anomaly``) is still computed and shown as
+    transparent evidence in every ranking / dossier, but it is **not weighted**
+    here - it flags a vessel for review, it does not move the score.
     """
 
     # -- physical evidence --------------------------------------------
-    spatiotemporal: float = 0.26   # hindcast-origin distance/time consistency
-    axis_alignment: float = 0.16   # slick reverse-drift axis vs vessel course
+    spatiotemporal: float = 0.30   # hindcast-origin distance/time consistency
+    axis_alignment: float = 0.18   # slick reverse-drift axis vs vessel course
     # -- AIS evidence -----------------------------------------------
-    proximity: float = 0.12        # closest point of approach to the origin
-    blackout: float = 0.12         # AIS dark period over the release window
-    ais_anomaly: float = 0.14      # autoencoder reconstruction error while near the slick
+    proximity: float = 0.14        # closest point of approach (CPA) to the origin
+    dwell: float = 0.10            # share of the vessel's observed time inside the search radius
+    blackout: float = 0.10         # AIS dark period over the release window
     # -- behavioural evidence ------------------------------------------
-    route_deviation: float = 0.12  # LSTM actual-vs-predicted track departure
-    vessel_prior: float = 0.08     # a-priori discharge likelihood by vessel type
+    route_deviation: float = 0.09  # LSTM actual-vs-predicted track departure
+    vessel_prior: float = 0.09     # a-priori discharge likelihood by vessel type
 
 
 class ATTRIB:
