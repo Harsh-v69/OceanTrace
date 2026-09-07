@@ -34,7 +34,9 @@ async function request(path, { method = "GET", body, form, auth = true, raw = fa
     const tok = getToken();
     if (tok) headers["Authorization"] = `Bearer ${tok}`;
   }
-  if (form) {
+  if (form instanceof FormData) {
+    opts.body = form;               // multipart; browser sets the boundary
+  } else if (form) {
     const p = new URLSearchParams();
     for (const [k, v] of Object.entries(form)) p.append(k, v);
     headers["Content-Type"] = "application/x-www-form-urlencoded";
@@ -121,6 +123,10 @@ export const api = {
   // ---- scenarios ----
   scenarios: () => request("/scenarios"),
   runScenario: (key) => request(`/scenarios/${key}/run`, { method: "POST" }),
+
+  // ---- uploads (Epic 3.3) ----
+  uploadScene: (formData) => request("/investigations/upload-scene", { method: "POST", form: formData }),
+  ingestAis: (formData) => request("/vessels/ingest-ais", { method: "POST", form: formData }),
 };
 
 // Fetch dossier .md / .html as text (needs auth header, so not a plain <a href>).

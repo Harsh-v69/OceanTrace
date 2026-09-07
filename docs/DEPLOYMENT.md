@@ -111,11 +111,15 @@ Equivalent without `run.py`: `uvicorn backend.main:app --port 8000`.
 ## 5. Guided demo (≈ 5 minutes)
 
 1. **Open** `http://127.0.0.1:8000/app/`.
-2. **Register** on the *Register* tab:
-   - a **NATIONAL** user to drive every scenario, **or**
-   - a **PILOT** with *Assigned zones* = `IN-MH` to show jurisdiction isolation.
-3. **Mission Control** — the Indian-coastline map, KPI tiles, and one button per
-   demo scenario.
+2. **Sign in** with a seeded account (password `DEFAULT_USER_PASSWORD`, default
+   `ChangeMe!OceanTrace1`):
+   - `national@oceantrace.gov.in` — drives every scenario, sees Alerts / Analytics / User Management;
+   - `pilot@oceantrace.gov.in` (`IN-MH`) — use it to show jurisdiction isolation.
+   Open self-registration is **off**; new operators are created under
+   **User Management** (REGIONAL / NATIONAL only).
+3. **Mission Control** — the Indian-coastline map, KPI tiles, one button per demo
+   scenario, and an **"Analyse an uploaded scene"** panel (drop in a Sentinel-1
+   GeoTIFF/PNG, optionally a ground-truth mask for a real IoU).
 4. Click **"Mumbai / Maharashtra – high-confidence spill"**. The pipeline runs
    (~6 s) and drops you in the **Investigation Workstation**:
    - *left* — scene + drift map with a **T−48 h … +48 h** timeline slider;
@@ -146,8 +150,10 @@ Equivalent without `run.py`: `uvicorn backend.main:app --port 8000`.
 ### Fully-offline demo
 
 Everything above works with the network cable pulled. The only degradation is
-the basemap: OpenStreetMap tiles fail to load and the map falls back to a plain
-ocean canvas — markers, tracks, polygons and the timeline all still work.
+the basemap: when OpenStreetMap tiles fail to load, the map falls back to the
+bundled simplified India coastline (`backend/static/data/coastline_in.geojson`)
+as a vector layer — markers, tracks, drift, stranding points and the timeline
+all still work.
 
 ---
 
@@ -172,13 +178,34 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
 Every run is byte-for-byte repeatable and each returns a
 `dossier_url` plus the full per-stage `timings`.
 
+**Ingest your own data** (Epic 3.3):
+
+```bash
+# analyse an arbitrary Sentinel-1 scene (+ optional ground-truth mask -> real IoU)
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+     -F scene=@scene.tif -F 'bbox=72.9,15.4,73.5,15.8' \
+     -F ground_truth_mask=@truth.png \
+     localhost:8000/api/v1/investigations/upload-scene
+
+# attach a custom AIS CSV to an investigation and re-run attribution
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+     -F investigation_id=1 -F reattribute=true -F csv_file=@ais.csv \
+     localhost:8000/api/v1/vessels/ingest-ais
+```
+
+**Real feeds** (optional, off by default):
+`SMS_PROVIDER=twilio` + the three `TWILIO_*` vars → real SMS (else Mock).
+`OFFLINE_MODE=false` + `pip install cdsapi xarray netCDF4` + `~/.cdsapirc` →
+`RealMetOceanProvider` fetches ERA5 wind + HYCOM current (else the deterministic
+Demo field). `GET /api/v1/system/health` reports the *effective* provider for both.
+
 ---
 
 ## 7. Verification
 
 ```bash
-python -m pytest -q                 # 225 passed
-python scripts/acceptance.py        # 26/26 checkpoints passed
+python -m pytest -q                 # 235 passed
+python scripts/acceptance.py        # 28/28 checkpoints passed
 python scripts/profile_pipeline.py  # per-stage timings + lazy-load report
 ```
 

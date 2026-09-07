@@ -129,11 +129,23 @@ class RealMetOceanProvider(MetOceanProvider):
     name = "era5_hycom"
 
     def __init__(self, fetch_fn: Callable[..., dict] | None = None, *, offline: bool | None = None):
+        if fetch_fn is None:
+            from backend.services.metocean_real import fetch_era5_hycom
+            fetch_fn = fetch_era5_hycom
         self._fetch = fetch_fn
         self._offline = settings.OFFLINE_MODE if offline is None else bool(offline)
 
     def available(self) -> bool:
-        return (not self._offline) and (self._fetch is not None)
+        if self._offline or self._fetch is None:
+            return False
+        # only claim availability when a real fetch could plausibly succeed
+        try:
+            from backend.services.metocean_real import deps_present, fetch_era5_hycom
+            if self._fetch is fetch_era5_hycom:
+                return deps_present()
+        except Exception:  # noqa: BLE001
+            return False
+        return True
 
     def get_field(self, bbox, *, t0_h: float, t1_h: float, **field_kwargs) -> MetOceanField:
         if not self.available():
@@ -141,7 +153,9 @@ class RealMetOceanProvider(MetOceanProvider):
                 "real ERA5/HYCOM backend not configured "
                 f"(offline={self._offline}, fetch_fn={'set' if self._fetch else 'none'})"
             )
-        raw = self._fetch(tuple(bbox), t0_h, t1_h, **field_kwargs)  # pragma: no cover
+        raw = self._fetch(tuple(bbox), t0_h, t1_h, **field_kwargs)
+        if raw is None:
+            raise MetOceanUnavailable("real ERA5/HYCOM fetch returned no data")
         grid = GriddedMetOcean(
             bbox, raw["lats"], raw["lons"], raw["times"],
             {k: raw[k] for k in ("wu", "wv", "cu", "cv")},

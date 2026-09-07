@@ -327,6 +327,58 @@ def run_acceptance() -> tuple[list[tuple[int, str, bool, str]], dict]:
             return "REGIONAL created + disabled a PILOT in-region; out-of-region create = 403"
         c.do("Hierarchical management: REGIONAL scoped to its region", _regional_mgmt)
 
+        # 27 - upload an arbitrary SAR scene + real IoU vs a ground-truth mask (Epic 3.3)
+        def _upload_scene():
+            import numpy as np
+            demo = ROOT / "backend" / "ml" / "sar" / "demo_data"
+            png = (demo / "demo_scene.png").read_bytes()
+            bbox = ",".join(str(float(v)) for v in np.load(demo / "demo_scene.npz")["bbox"])
+            try:
+                import cv2
+                mask = np.load(demo / "demo_scene.npz")["truth_mask"].astype(np.uint8) * 255
+                _ok, mbuf = cv2.imencode(".png", mask)
+                mask_png = mbuf.tobytes()
+            except Exception:  # noqa: BLE001
+                mask_png = None
+            files = {"scene": ("demo_scene.png", png, "image/png")}
+            if mask_png:
+                files["ground_truth_mask"] = ("truth.png", mask_png, "image/png")
+            # the demo scene sits off Goa/Karnataka - use the NATIONAL admin
+            r = client.post(f"{API}/investigations/upload-scene", headers=_h(client, NATIONAL),
+                            data={"title": "Acceptance upload", "bbox": bbox}, files=files)
+            _assert(r.status_code == 201, r.text)
+            m = r.json()["summary_metrics"]
+            _assert("sar" in m, "uploaded scene produced no SAR metrics")
+            state["upload_inv"] = r.json()["id"]
+            iou = m.get("iou")
+            if mask_png:
+                _assert(iou is not None and 0.0 <= iou["value"] <= 1.0, f"IoU missing/out of range: {iou}")
+                return f"{r.json()['reference']} - {m['sar']['scene_classification']}, IoU {iou['value']}"
+            return f"{r.json()['reference']} - {m['sar']['scene_classification']} (no mask supplied)"
+        c.do("Upload arbitrary SAR scene -> pipeline + real IoU", _upload_scene)
+
+        # 28 - ingest a custom AIS CSV and re-attribute (Epic 3.3)
+        def _ingest_ais():
+            origin = state["m"]["hindcast"]["best_estimate"]
+            lines = ["MMSI,BaseDateTime,LAT,LON,SOG,COG,Heading,VesselName,VesselType"]
+            for i in range(30):
+                t = f"2026-03-06T{2 + i // 12:02d}:{(i * 5) % 60:02d}:00Z"
+                la = origin[0] - 0.25 + i * (0.25 / 29)
+                lo = origin[1] - 0.25 + i * (0.25 / 29)
+                lines.append(f"424242424,{t},{la:.5f},{lo:.5f},11.0,45.0,45,MV ACCEPT AIS,80")
+            r = client.post(
+                f"{API}/vessels/ingest-ais", headers=state["pilot"],
+                data={"investigation_id": str(state["inv_id"]), "reattribute": "true"},
+                files={"csv_file": ("ais.csv", "\n".join(lines).encode(), "text/csv")},
+            )
+            _assert(r.status_code == 201, r.text)
+            b = r.json()
+            _assert(b["reattributed"] is True and b["vessels"] >= 1, b)
+            vs = {v["mmsi"] for v in client.get(f"{API}/vessels", headers=state["pilot"]).json()}
+            _assert("424242424" in vs, "ingested vessel not persisted")
+            return f"{b['rows_ingested']} rows -> {b['vessels']} vessel(s); prime {b.get('prime_suspect')}"
+        c.do("Ingest custom AIS CSV -> re-attribution", _ingest_ais)
+
     for k, v in _saved.items():          # leave the shared settings singleton as we found it
         setattr(settings, k, v)
     return c.results, state.get("timings", {})

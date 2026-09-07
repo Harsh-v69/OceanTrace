@@ -19,9 +19,17 @@ PyJWT>=2.8
 bcrypt>=4.1
 
 # --- alerting --------------------------------------------------------
-# Only needed for real SMS (SMS_PROVIDER=twilio); the Mock provider is the
-# default and TwilioSmsProvider degrades to a FAILED result without it.
-# twilio>=9.0
+# Real SMS. Used only when SMS_PROVIDER=twilio AND all three TWILIO_* env vars
+# are set; otherwise the app silently falls back to the Mock provider.
+twilio>=9.0
+
+# --- real met-ocean (optional; RealMetOceanProvider) -------------------
+# Not installed by default - the deterministic Demo provider is the fallback.
+# ERA5 wind (Copernicus CDS, needs ~/.cdsapirc) + HYCOM current (OPeNDAP):
+#   pip install cdsapi xarray netCDF4
+# cdsapi>=0.7
+# xarray>=2024.1
+# netCDF4>=1.6
 
 # --- geometry (RBAC point-in-polygon over GeoJSON jurisdictions) --------
 shapely>=2.0

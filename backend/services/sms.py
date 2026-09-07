@@ -114,13 +114,37 @@ class TwilioSmsProvider(SmsProvider):
 _provider: SmsProvider | None = None
 
 
+def _twilio_configured() -> bool:
+    return all(getattr(settings, k, None) for k in
+               ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER"))
+
+
 def get_sms_provider() -> SmsProvider:
-    """Process-wide provider chosen by ``settings.SMS_PROVIDER`` (mock | twilio)."""
+    """Process-wide provider.
+
+    ``SMS_PROVIDER=twilio`` uses :class:`TwilioSmsProvider` **only when all three
+    ``TWILIO_*`` credentials are present**; if any is missing (or the ``twilio``
+    package is not installed) it logs a warning and falls back to the Mock
+    provider so the app still runs. Any other value uses the Mock provider.
+    """
     global _provider
-    if _provider is None:
-        _provider = (TwilioSmsProvider() if settings.SMS_PROVIDER.lower() == "twilio"
-                     else MockSmsProvider())
-        log.info("SMS provider = %s", _provider.name)
+    if _provider is not None:
+        return _provider
+
+    want_twilio = settings.SMS_PROVIDER.lower() == "twilio"
+    if want_twilio and _twilio_configured():
+        try:
+            _provider = TwilioSmsProvider()
+        except Exception as exc:  # noqa: BLE001 - never break startup over SMS
+            log.warning("TwilioSmsProvider unavailable (%s); using the Mock provider", exc)
+            _provider = MockSmsProvider()
+    else:
+        if want_twilio:
+            log.warning("SMS_PROVIDER=twilio but TWILIO_* credentials are not set; "
+                        "using the Mock provider")
+        _provider = MockSmsProvider()
+
+    log.info("SMS provider = %s", _provider.name)
     return _provider
 
 

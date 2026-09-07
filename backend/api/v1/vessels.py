@@ -13,10 +13,14 @@ track: decimated pings + loiter spans + blackout gaps.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import csv
+import io
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend.api._authz import require_row_access
 from backend.core.database import get_db
 from backend.core.security import get_current_user
 from backend.models.anomaly import Anomaly
@@ -27,6 +31,54 @@ from backend.schemas.vessel import VesselOut
 from backend.services import jurisdiction as juris
 
 router = APIRouter(prefix="/vessels", tags=["vessels"])
+
+
+@router.post(
+    "/ingest-ais",
+    status_code=status.HTTP_201_CREATED,
+    summary="Ingest a custom AIS CSV and attach the tracks to an investigation",
+)
+async def ingest_ais(
+    investigation_id: int = Form(...),
+    csv_file: UploadFile = File(..., description="AIS CSV (MarineCadastre-style or generic headers)"),
+    reattribute: bool = Form(True, description="re-run fusion against the new tracks"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    from backend.services import orchestration
+
+    inv = db.get(Investigation, investigation_id)
+    if inv is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Investigation not found")
+    require_row_access(db, user, lat=inv.centroid_lat, lon=inv.centroid_lon,
+                       jurisdiction_id=inv.jurisdiction_id)
+
+    raw = (await csv_file.read()).decode("utf-8-sig", errors="replace")
+    rows = list(csv.DictReader(io.StringIO(raw)))
+    if not rows:
+        raise HTTPException(422, detail="the CSV has no data rows")
+
+    if reattribute:
+        result = orchestration.reattribute_with_tracks(db, inv, rows)
+    else:
+        import copy
+
+        from backend.services import vessels as _v
+        vproc = _v.process_ais_records(rows, inv.detected_at.isoformat())
+        _v.persist_vessels(db, vproc["tracks"], last_seen_at=inv.detected_at)
+        m = copy.deepcopy(inv.summary_metrics or {})
+        vts = dict(m.get("vessel_tracks") or {})
+        vts.update(_v.build_track_views(vproc["tracks"]))
+        m["vessel_tracks"] = vts
+        m.setdefault("caveats", []).append("Vessel tracks attached from operator-ingested AIS.")
+        inv.summary_metrics = m
+        db.commit()
+        db.refresh(inv)
+        result = {"reattributed": False, "vessels": len(vproc["tracks"]), "report": vproc["report"]}
+
+    result["investigation_id"] = inv.id
+    result["rows_ingested"] = len(rows)
+    return result
 
 
 def _accessible_vessel_ids(db: Session, user: User) -> set[int] | None:

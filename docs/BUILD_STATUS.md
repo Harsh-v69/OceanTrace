@@ -8,7 +8,7 @@ oil-spill detection + AIS vessel attribution.
 
 > Phases 1–9 delivered the prototype. A follow-on issues backlog is being worked
 > as **Epics** (see §7). Epic 1 (RBAC, hierarchical user management, vessel
-> tracking, OceanTrace rebrand) is **complete**; Epic 2 is **complete** (LSTM unlock, dwell/weights, land collision, offline basemap).
+> tracking, OceanTrace rebrand) is **complete**; Epics 2 and 3 are **complete** (Epic 3 credential-gated: Twilio + real met-ocean fall back to Mock/Demo without keys).
 
 ---
 
@@ -224,16 +224,35 @@ $ python -m pytest -q          →  225 passed  (~108 s, faster than before)
 $ python scripts/acceptance.py  →  26/26 checkpoints passed
 ```
 
-**Queued:** Epic 3 (Twilio account, Copernicus CDS key); Epic 4 (a PostGIS
-instance) — both for full verification.
+### Epic 3 — real feeds + custom ingestion — **COMPLETE, credential-gated** (2026-09-07)
+
+| Item | What shipped |
+|---|---|
+| **3.1 Twilio live wiring** | `twilio>=9.0` uncommented in `requirements.txt` and installed. `get_sms_provider()` uses `TwilioSmsProvider` **only when all three `TWILIO_*` credentials are set**; if any is missing (or the package is absent) it logs a warning and returns the Mock provider — the app never breaks over SMS. `GET /system/health` now reports `sms_effective`. A real send still needs a paid Twilio account. |
+| **3.2 Real met-ocean** | New `services/metocean_real.py` — ERA5 10 m wind via `cdsapi` (needs `~/.cdsapirc`) + HYCOM GOFS 3.1 surface currents via an `xarray` OPeNDAP read, regridded onto the ERA5 grid. `RealMetOceanProvider`'s default `fetch_fn` is now `fetch_era5_hycom`; `available()` is a fast static probe (`cdsapi` + `xarray` + a netCDF reader + the key file all present) and `get_field` returns `MetOceanUnavailable` on any fetch failure → the deterministic Demo field. Optional deps are commented in `requirements.txt`. `GET /system/health` reports `metocean_effective` + `metocean_real_ready`. |
+| **3.3 Upload endpoints** | `POST /api/v1/investigations/upload-scene` (multipart) — accepts a Sentinel-1 GeoTIFF/PNG (+ optional ground-truth mask), decodes it (`load_scene` / `tifffile` / `cv2`), runs the **full pipeline** (`orchestration.run_uploaded_scene`), and creates a jurisdiction-scoped Investigation. When a mask is supplied it computes a **real IoU** of the detected oil mask vs the mask and attaches it to `summary_metrics.iou`. `POST /api/v1/vessels/ingest-ais` (multipart) — parses a custom AIS CSV (MarineCadastre-style or generic headers via the schema aliases), reconstructs tracks with `tracks.py`, persists `Vessel` rows, and (default) **re-runs fusion** against the investigation's existing hindcast (`orchestration.reattribute_with_tracks`), refreshing `attribution` + `vessel_tracks` + the FUSION anomalies. Console: an *"Analyse an uploaded scene"* panel on Mission Control and an *"Ingest AIS CSV"* control on the Workstation. |
+
+Fixed a latent bug surfaced by the zero-AIS upload path (`ranking["gate"]` could
+be `None`). New: `test_uploads.py` (7 tests) + 2 real-met-ocean probe tests.
+Acceptance 26 → 28 (upload + IoU; AIS ingestion + re-attribution).
+
+```
+$ python -m pytest -q          →  235 passed
+$ python scripts/acceptance.py  →  28/28 checkpoints passed
+```
+
+**Queued:** Epic 4 (PostGIS + Alembic; Mackay/Fay weathering) — needs a PostGIS
+instance for full verification.
 
 ---
 
 ## 8. Sign-off
 
-Phases 1–9 **PASSED**; Epic 1 and Epic 2 **COMPLETE**. **225/225** automated
-tests green. **26/26** acceptance checkpoints green. Lazy-loading verified.
+Phases 1–9 **PASSED**; Epics 1–3 **COMPLETE** (Epic 3 credential-gated — Twilio
+and real met-ocean fall back to Mock/Demo without keys). **235/235** automated
+tests green. **28/28** acceptance checkpoints green. Lazy-loading verified.
 Performance within tiered budgets on a single CPU core with no GPU and no network
-(Epic 2 made the pipeline ~3× faster — see §4.3).
+(Epic 2 made the pipeline ~3× faster — see §4.3). Only Epic 4 (PostGIS + Alembic;
+Mackay/Fay weathering) remains.
 
 See `docs/DEPLOYMENT.md` for run and demo instructions.

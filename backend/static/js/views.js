@@ -1,11 +1,11 @@
 /* All screens for the Operations Console. Each view renders into ctx.root and
    wires its own events. ctx = { user, root, go, toast }. */
 
-import { api, fetchText } from "./api.js?v=epic2";
+import { api, fetchText } from "./api.js?v=epic3";
 import {
   makeMap, anomalyMarker, vesselMarker, trackLine, polygon, fit, L,
   vesselTrackLayer, vesselPopupHtml, shorelineContact,
-} from "./map.js?v=epic2";
+} from "./map.js?v=epic3";
 
 /* -------------------------------------------------------------- helpers -- */
 const h = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -83,6 +83,15 @@ async function missionControl(ctx) {
        <div class="panel"><h2>Run a demo scenario</h2>
          <p class="muted">Each runs the full pipeline: SAR detection &rarr; look-alike filter &rarr; drift hindcast &rarr; AIS fusion &rarr; jurisdiction &rarr; SMS alert.</p>
          <div id="mc-scenarios" class="row"></div><p id="mc-run-msg" class="muted"></p></div>
+       <div class="panel"><h2>Analyse an uploaded scene</h2>
+         <form id="mc-upload" class="row" style="align-items:flex-end;gap:.6rem;flex-wrap:wrap">
+           <label>Sentinel-1 GeoTIFF / PNG<input type="file" name="scene" accept=".tif,.tiff,.png,.jpg" required></label>
+           <label>Ground-truth mask (optional &rarr; real IoU)<input type="file" name="ground_truth_mask" accept=".tif,.tiff,.png"></label>
+           <label>bbox W,S,E,N<input name="bbox" placeholder="72.0,18.0,72.4,18.4" size="20"></label>
+           <button class="btn btn-primary" type="submit">Analyse</button>
+           <span id="mc-upload-msg" class="muted"></span>
+         </form>
+       </div>
        <div class="panel"><h2>Recent investigations</h2><div id="mc-recent"></div></div>
      </div>`
   );
@@ -141,6 +150,26 @@ async function missionControl(ctx) {
       $$("#mc-scenarios .btn").forEach((x) => (x.disabled = false));
     }
   }));
+
+  $("#mc-upload").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    if (!fd.get("ground_truth_mask")?.size) fd.delete("ground_truth_mask");
+    if (!fd.get("bbox")) fd.delete("bbox");
+    const btn = e.target.querySelector("button");
+    btn.disabled = true; $("#mc-upload-msg").textContent = "Analysing the uploaded scene...";
+    try {
+      const inv = await api.uploadScene(fd);
+      const iou = inv.summary_metrics?.iou;
+      ctx.toast(`${inv.reference}: ${inv.summary_metrics?.sar?.scene_classification}`
+        + (iou ? ` · IoU ${iou.value}` : ""));
+      ctx.go(`#/workstation/${inv.id}`);
+    } catch (err) {
+      $("#mc-upload-msg").textContent = (err.status === 403 ? "Outside your jurisdiction. " : "")
+        + (Array.isArray(err.detail) ? err.detail.map((d) => d.msg).join("; ") : (err.detail || err.message));
+      btn.disabled = false;
+    }
+  });
 
   $("#mc-recent").innerHTML = invs.length ? `<table class="data"><thead><tr>
     <th>Ref</th><th>Title</th><th>Status</th><th>Conf.</th><th>Opened</th></tr></thead><tbody>${
@@ -269,9 +298,13 @@ async function workstation(ctx, params) {
     `<div class="row" style="margin-bottom:1rem">
       ${statusBadge(inv.status)} ${confBadge(sar.confidence)}
       <span class="badge mut">${h(sar.scene_classification || "-")}</span>
+      ${m.iou ? `<span class="badge info" title="vs operator ground-truth mask">IoU ${num(m.iou.value, 3)}</span>` : ""}
       <span class="spacer"></span>
+      <label class="btn" style="cursor:pointer">Ingest AIS CSV
+        <input type="file" id="ws-ais" accept=".csv" hidden></label>
       <button class="btn" id="ws-evidence">Evidence dossier</button>
     </div>
+    <p id="ws-ais-msg" class="muted" style="margin:-.6rem 0 1rem"></p>
     <div class="workstation">
       <div class="wcol">
         <div class="panel"><h2>Scene, drift &amp; vessel tracks</h2><div id="ws-map" class="map sm"></div>
@@ -327,6 +360,25 @@ async function workstation(ctx, params) {
     ${raw(m)}`);
 
   $("#ws-evidence").addEventListener("click", () => ctx.go(`#/evidence/${id}`));
+
+  $("#ws-ais").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("investigation_id", id);
+    fd.append("csv_file", file);
+    fd.append("reattribute", "true");
+    $("#ws-ais-msg").textContent = `Ingesting ${file.name} and re-running attribution...`;
+    try {
+      const r = await api.ingestAis(fd);
+      ctx.toast(r.reattributed
+        ? `${r.vessels} vessel(s) ingested; prime suspect: ${r.prime_suspect || "none"}`
+        : `${r.vessels} vessel track(s) attached`);
+      workstation(ctx, params);        // reload the view with the new attribution
+    } catch (err) {
+      $("#ws-ais-msg").textContent = (err.detail || err.message);
+    }
+  });
 
   // ---- map: anomaly, origin, release polygon, drift frames ----
   const map = makeMap($("#ws-map"), inv.centroid_lat ? { center: [inv.centroid_lat, inv.centroid_lon], zoom: 8 } : {});

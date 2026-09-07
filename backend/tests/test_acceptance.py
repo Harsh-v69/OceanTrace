@@ -3,7 +3,7 @@ The end-to-end acceptance checklist, run as part of the suite.
 
 The checklist logic lives in ``scripts/acceptance.py`` (also runnable on its own
 for a human-readable report). Here we just assert every checkpoint passed.
-Epic 1 extended it from 24 to 26 (hierarchical user management + vessel tracking).
+Epics 1-3 extended it from 24 to 28.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def acceptance():
 
 def test_all_acceptance_checkpoints_pass(acceptance):
     results, _ = acceptance
-    assert len(results) == 26, f"expected 26 checkpoints, ran {len(results)}"
+    assert len(results) == 28, f"expected 28 checkpoints, ran {len(results)}"
     failed = [(n, label, detail) for n, label, ok, detail in results if not ok]
     assert not failed, "acceptance failures:\n" + "\n".join(
         f"  {n:>2}. {label} - {detail}" for n, label, detail in failed

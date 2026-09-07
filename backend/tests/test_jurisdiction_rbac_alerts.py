@@ -285,15 +285,31 @@ def test_twilio_provider_selected_when_configured(monkeypatch):
         sms_svc.reset_sms_provider()
 
 
-def test_twilio_without_credentials_raises(monkeypatch):
+def test_twilio_without_credentials_falls_back_to_mock(monkeypatch):
+    # Epic 3.1: SMS_PROVIDER=twilio with missing TWILIO_* must NOT break startup -
+    # it logs a warning and uses the Mock provider.
     monkeypatch.setattr(settings, "SMS_PROVIDER", "twilio")
     monkeypatch.setattr(settings, "TWILIO_ACCOUNT_SID", None)
+    monkeypatch.setattr(settings, "TWILIO_AUTH_TOKEN", None)
+    monkeypatch.setattr(settings, "TWILIO_FROM_NUMBER", None)
     sms_svc.reset_sms_provider()
     try:
-        with pytest.raises(RuntimeError, match="TWILIO_ACCOUNT_SID"):
-            sms_svc.get_sms_provider()
+        prov = sms_svc.get_sms_provider()
+        assert isinstance(prov, sms_svc.MockSmsProvider)
     finally:
         sms_svc.reset_sms_provider()
+
+
+def test_twilio_provider_class_still_requires_credentials():
+    # the class contract is unchanged - constructing it directly without creds raises
+    from backend.core.config import settings as _s
+    old = (_s.TWILIO_ACCOUNT_SID, _s.TWILIO_AUTH_TOKEN, _s.TWILIO_FROM_NUMBER)
+    _s.TWILIO_ACCOUNT_SID = _s.TWILIO_AUTH_TOKEN = _s.TWILIO_FROM_NUMBER = None
+    try:
+        with pytest.raises(RuntimeError, match="TWILIO_"):
+            sms_svc.TwilioSmsProvider()
+    finally:
+        _s.TWILIO_ACCOUNT_SID, _s.TWILIO_AUTH_TOKEN, _s.TWILIO_FROM_NUMBER = old
 
 
 # =========================================================================== #

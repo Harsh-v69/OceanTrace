@@ -401,3 +401,28 @@ def test_analyze_drift_end_to_end_from_sar(sar_observed):
     fore = out["forecast"]
     assert [s["t_h"] for s in fore["horizons"]] == [6.0, 12.0, 24.0, 48.0]
     assert fore["provenance"]["label"] == "Demo / simulated environmental field"
+
+
+# =========================================================================== #
+# Epic 3.2 - real met-ocean provider (credential-gated)
+# =========================================================================== #
+def test_real_metocean_status_probe_is_honest():
+    from backend.services.metocean_real import real_metocean_status
+    st = real_metocean_status()
+    assert set(st) >= {"cdsapi_installed", "xarray_installed",
+                       "netcdf_reader_installed", "cdsapirc_present", "ready"}
+    # "ready" iff every dependency + the CDS key are present
+    assert st["ready"] == all(st[k] for k in
+                              ("cdsapi_installed", "xarray_installed",
+                               "netcdf_reader_installed", "cdsapirc_present"))
+
+
+def test_real_metocean_provider_unavailable_falls_back_to_demo():
+    import backend.services.drift as D
+    from backend.services.metocean_real import deps_present
+    prov = D.RealMetOceanProvider(offline=False)      # default fetch_fn = fetch_era5_hycom
+    # available() only when the real deps + key are actually present on this host
+    assert prov.available() == deps_present()
+    # resolve_metocean_field always returns a usable (here: demo) field
+    field = D.resolve_metocean_field([72.0, 18.0, 72.6, 18.6], cache=False)
+    assert field.grid is not None

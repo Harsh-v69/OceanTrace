@@ -15,6 +15,10 @@ router = APIRouter(prefix="/system", tags=["system"])
 
 @router.get("/health", summary="Liveness + dependency status")
 def health() -> dict:
+    from backend.services import sms as sms_svc
+    from backend.services.metocean_real import real_metocean_status
+
+    mo = real_metocean_status()
     return {
         "status": "ok",
         "app": settings.APP_NAME,
@@ -23,6 +27,10 @@ def health() -> dict:
         "problem_statement_id": settings.PROBLEM_STATEMENT_ID,
         "offline_mode": settings.OFFLINE_MODE,
         "sms_provider": settings.SMS_PROVIDER,
+        "sms_effective": sms_svc.get_sms_provider().name,
+        "metocean_effective": ("era5_hycom" if (not settings.OFFLINE_MODE and mo["ready"])
+                               else "demo (simulated)"),
+        "metocean_real_ready": mo["ready"],
         "database": "up" if check_db() else "down",
         "time_utc": datetime.now(timezone.utc).isoformat(),
     }

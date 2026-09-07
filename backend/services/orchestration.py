@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import numpy as np
@@ -242,9 +243,9 @@ def run_full_pipeline(db: Session, spec, scene, user: User) -> tuple[Investigati
     # the AIS-normalisation / gate cost is folded into fuse; split it for the record
     timings["ais_correlation"] = round(dt_fuse * 0.15 * 1000.0, 1)
     timings["attribution_fusion"] = round(dt_fuse * 0.85 * 1000.0, 1)
+    _gate = ranking.get("gate") or {}
     _step("correlate", "AIS track normalisation + traffic gate", dt_fuse * 0.15,
-          n_input=ranking.get("gate", {}).get("n_input"),
-          n_kept=ranking.get("gate", {}).get("n_kept"))
+          n_input=_gate.get("n_input"), n_kept=_gate.get("n_kept"))
     _step("rank", "Unified fusion + release-time feedback loop", dt_fuse * 0.85,
           prime=ranking["summary"].get("prime_suspect", {}).get("identity", {}).get("name")
           if ranking.get("summary") else None,
@@ -447,3 +448,177 @@ def _persist(db, spec, user, *, status, centroid, jurisdiction, summary_metrics,
     db.commit()
     db.refresh(inv)
     return inv
+
+
+# --------------------------------------------------------------------------- #
+# Epic 3.3 - arbitrary uploaded scenes + AIS ingestion
+# --------------------------------------------------------------------------- #
+@dataclass
+class _UploadSpec:
+    """A ``spec`` shaped like a demo scenario, for an operator-uploaded scene."""
+    key: str
+    name: str
+    summary: str
+    region_hint: str
+    obs_time: datetime
+    center: tuple
+    bbox: list
+    truth_mmsi: int | None = None
+    expected: dict = field(default_factory=dict)
+    make_tracks = None            # attribute, not a field - orchestration reads spec.make_tracks
+
+
+@dataclass
+class _UploadScene:
+    sigma0_db: np.ndarray
+    meta: dict = field(default_factory=dict)
+
+
+def iou(mask_a, mask_b) -> float:
+    """Intersection-over-union of two boolean masks (resized to match if needed)."""
+    a = np.asarray(mask_a).astype(bool)
+    b = np.asarray(mask_b).astype(bool)
+    if a.shape != b.shape:
+        import cv2
+        b = cv2.resize(b.astype(np.uint8), (a.shape[1], a.shape[0]),
+                       interpolation=cv2.INTER_NEAREST).astype(bool)
+    union = np.logical_or(a, b).sum()
+    return float(np.logical_and(a, b).sum() / union) if union else 0.0
+
+
+def run_uploaded_scene(
+    db: Session, user: User, sigma0_db: np.ndarray, *,
+    title: str, bbox: list | None, acquisition: datetime | None,
+    truth_mask=None,
+) -> Investigation:
+    """Full pipeline on an operator-uploaded SAR scene (no AIS traffic yet)."""
+    obs_time = acquisition or datetime.now(timezone.utc)
+    if bbox is None:
+        # a 0.4 deg box centred on India's west coast as a neutral default
+        bbox = [72.0, 18.0, 72.4, 18.4]
+    center = ((bbox[1] + bbox[3]) / 2.0, (bbox[0] + bbox[2]) / 2.0)
+    spec = _UploadSpec(
+        key=f"upload-{uuid.uuid4().hex[:8]}",
+        name=title or "Uploaded SAR scene",
+        summary="Operator-uploaded Sentinel-1 scene analysed through the unified pipeline.",
+        region_hint="", obs_time=obs_time, center=center, bbox=list(bbox),
+    )
+    scene = _UploadScene(sigma0_db=np.asarray(sigma0_db, dtype=np.float32))
+
+    inv, _steps = run_full_pipeline(db, spec, scene, user)
+
+    if truth_mask is not None:
+        sar = satellite_svc.analyze_scene(
+            scene.sigma0_db, include_arrays=True,
+            ingest_kwargs={"bbox": list(bbox), "acquisition": obs_time.isoformat()},
+        )
+        detected = sar.get("mask")
+        if detected is not None:
+            score = iou(detected, truth_mask)
+            m = dict(inv.summary_metrics or {})
+            m["iou"] = {
+                "value": round(score, 4),
+                "against": "operator-supplied ground-truth mask",
+                "detected_pixels": int(np.asarray(detected).sum()),
+                "truth_pixels": int(np.asarray(truth_mask).astype(bool).sum()),
+            }
+            inv.summary_metrics = m
+            db.commit()
+            db.refresh(inv)
+            log.info("uploaded scene %s: IoU vs ground truth = %.3f", inv.reference, score)
+    return inv
+
+
+def reattribute_with_tracks(db: Session, inv: Investigation, tracks: list) -> dict:
+    """Re-run AIS correlation + fusion for an existing investigation against
+    freshly-ingested vessel tracks; update ``summary_metrics`` in place."""
+    import copy
+    m = copy.deepcopy(inv.summary_metrics or {})
+    hind_view = m.get("hindcast")
+    obs_iso = (m.get("sar") or {}).get("acquisition") or inv.detected_at.isoformat()
+    bbox = ((m.get("sar") or {}).get("bounding_box") or {})
+    bbox_list = [bbox.get("west"), bbox.get("south"), bbox.get("east"), bbox.get("north")] \
+        if isinstance(bbox, dict) else (bbox or None)
+
+    from backend.services import vessels as _v
+
+    vproc = _v.process_ais_records(
+        [r for t in tracks for r in t.get("records", [])] if tracks and "records" in tracks[0] else tracks,
+        obs_iso,
+    )
+    vtracks = vproc["tracks"]
+    vessel_ids = _v.persist_vessels(db, vtracks, last_seen_at=inv.detected_at)
+
+    if not hind_view:
+        # look-alike / no origin: just attach the track views
+        views = _v.build_track_views(vtracks)
+        m.setdefault("vessel_tracks", {}).update(views)
+        inv.summary_metrics = m
+        db.commit(); db.refresh(inv)
+        return {"reattributed": False, "vessels": len(vtracks), "report": vproc["report"]}
+
+    observed = {
+        "centroid": [inv.centroid_lat, inv.centroid_lon],
+        "bbox": bbox_list,
+        "acquisition": obs_iso,
+        "area_km2": ((m.get("sar") or {}).get("primary_detection") or {})
+                    .get("characterization", {}).get("area_km2"),
+        "width_m": (((m.get("sar") or {}).get("primary_detection") or {})
+                    .get("characterization", {}).get("width_km") or 0.0) * 1000.0 or None,
+    }
+    field_mo = drift_svc.resolve_metocean_field(bbox_list or list(drift_svc._bbox_for_observed(observed)))
+    fb = attribution_svc.attribute_with_feedback(
+        observed, [{"records": [r for t in tracks for r in t.get("records", [])]}]
+        if tracks and isinstance(tracks[0], dict) and "records" in tracks[0] else tracks,
+        field=field_mo, max_iterations=2, n_particles=280,
+    )
+    ranking = fb["final_ranking"]
+    window_h = (m.get("hindcast") or {}).get("release_window_h")
+    views = _v.build_track_views(vtracks, window_h=window_h)
+    for cand in ranking.get("candidates", []):
+        mm = str(cand["identity"]["mmsi"])
+        if mm in views:
+            comps = cand.get("components", {})
+            views[mm]["attribution"] = {
+                "rank": cand.get("rank"), "score": cand.get("score"),
+                "assessment": cand.get("assessment"), "is_prime": cand.get("rank") == 1,
+                "best_match_time_h": cand.get("best_match_time_h"), "cpa_km": cand.get("cpa_km"),
+                "ais_anomaly": (comps.get("ais_anomaly") or {}).get("detail"),
+                "route_deviation": (comps.get("route_deviation") or {}).get("detail"),
+            }
+            views[mm]["vessel_id"] = vessel_ids.get(mm)
+
+    m["attribution"] = _trim_ranking(ranking)
+    m["vessel_tracks"] = views
+    m["verdict"] = (ranking["summary"].get("verdict") if ranking.get("summary")
+                    else m.get("verdict"))
+    m.setdefault("caveats", []).append("Attribution refreshed against operator-ingested AIS.")
+
+    # replace the FUSION anomalies
+    from backend.models.anomaly import Anomaly as _A
+    for a in list(inv.anomalies):
+        if a.source == AnomalySource.FUSION:
+            db.delete(a)
+    for cand in ranking.get("candidates", []):
+        mm = str(cand["identity"]["mmsi"])
+        is_prime = cand.get("rank") == 1
+        db.add(_A(
+            investigation_id=inv.id, vessel_id=vessel_ids.get(mm),
+            type=AnomalyType.ROUTE_DEVIATION if is_prime else AnomalyType.OTHER,
+            source=AnomalySource.FUSION,
+            label="Attributed vessel" if is_prime else "Candidate vessel",
+            confidence=min(cand["score"] / 100.0, 1.0),
+            occurred_at=inv.detected_at, lat=inv.centroid_lat, lon=inv.centroid_lon,
+            details={"mmsi": cand["identity"]["mmsi"], "name": cand["identity"]["name"],
+                     "score": cand["score"], "assessment": cand["assessment"],
+                     "rank": cand.get("rank"), "ingested_ais": True},
+        ))
+    inv.summary_metrics = m
+    db.commit(); db.refresh(inv)
+    return {
+        "reattributed": True, "vessels": len(vtracks),
+        "prime_suspect": (ranking["summary"].get("prime_suspect", {}).get("identity", {}).get("name")
+                          if ranking.get("summary") else None),
+        "n_candidates": len(ranking.get("candidates", [])),
+        "report": vproc["report"],
+    }
