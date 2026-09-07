@@ -34,6 +34,9 @@ async def lifespan(_app: FastAPI):
         settings.ENV,
         settings.OFFLINE_MODE,
     )
+    from backend.core.database import enable_postgis
+
+    enable_postgis()          # no-op unless on Postgres with geoalchemy2 installed
     init_db()
     log.info("Database ready: %s", settings.DATABASE_URL)
 

@@ -204,8 +204,8 @@ Demo field). `GET /api/v1/system/health` reports the *effective* provider for bo
 ## 7. Verification
 
 ```bash
-python -m pytest -q                 # 235 passed
-python scripts/acceptance.py        # 28/28 checkpoints passed
+python -m pytest -q                 # 243 passed
+python scripts/acceptance.py        # 30/30 checkpoints passed
 python scripts/profile_pipeline.py  # per-stage timings + lazy-load report
 ```
 
@@ -216,8 +216,22 @@ See `docs/BUILD_STATUS.md` for the recorded results.
 ## 8. Production notes (beyond the prototype)
 
 - Set a strong `JWT_SECRET_KEY`; put the app behind TLS.
-- Point `DATABASE_URL` at PostGIS — the ORM models and GeoJSON geometry are
-  already compatible; swap Shapely point-in-polygon for `ST_Contains` if desired.
+- Point `DATABASE_URL` at PostgreSQL/PostGIS, e.g.
+  `postgresql+psycopg://user:pass@host/oceantrace`, and
+  `pip install "psycopg[binary]" geoalchemy2`. On boot `enable_postgis()` issues
+  `CREATE EXTENSION IF NOT EXISTS postgis` (best-effort; harmless if already
+  present or if the role lacks permission — create it once as a superuser). The
+  ORM models and GeoJSON geometry are already compatible; swap Shapely
+  point-in-polygon for `ST_Contains` if desired.
+- Manage the schema with Alembic instead of `init_db()`:
+  ```bash
+  alembic upgrade head        # apply migrations (reads DATABASE_URL from settings)
+  alembic revision --autogenerate -m "describe change"
+  alembic check               # fail CI if models drift from migrations
+  ```
+  The initial migration (`alembic/versions/2904cd6359f2_initial_schema.py`) builds
+  all six tables; `env.py` uses batch mode on SQLite so migrations run on both
+  backends.
 - Set `SMS_PROVIDER=twilio` with real credentials; the Mock provider stays as the
   automatic fallback if Twilio returns an error (the alert is recorded `FAILED`
   with the error, and is retryable).

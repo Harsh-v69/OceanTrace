@@ -45,6 +45,34 @@ class DRIFT:
     BEACH_MOVE_EPS_DEG = 1e-7       # "has stopped moving" threshold
 
 
+class WEATHERING:
+    """Epic 4.2 - basic Mackay/Fay weathering (evaporation + gravity-viscous spread)."""
+
+    # SAR gives area, not volume; assume a thin initial film to seed a mass balance.
+    INITIAL_SLICK_THICKNESS_M = 1.0e-3        # 1 mm - typical for a fresh surface slick
+    OIL_DENSITY_KG_M3 = 870.0                 # medium crude
+
+    # Fingas (2004) empirical log evaporation: %Ev = (a + b*T_C) * ln(t_minutes).
+    # Coarse per-class coefficients; T in degrees C, t in minutes.
+    EVAP_COEFFS = {
+        "light_crude":  (2.86, 0.045),
+        "medium_crude": (1.65, 0.045),        # default
+        "heavy_crude":  (0.39, 0.013),
+        "diesel":       (3.28, 0.037),
+        "bunker":       (0.13, 0.013),
+    }
+    DEFAULT_OIL = "medium_crude"
+    DEFAULT_WATER_TEMP_C = 26.0               # Arabian Sea surface, boreal winter
+    MAX_EVAPORATED_FRACTION = 0.75            # asymptotic ceiling for a residual slick
+
+    # Fay gravity-viscous regime area growth (order-of-magnitude, SI):
+    #   A(t) = FAY_K2^2 * pi * ( (delta * g * V^2) / sqrt(nu_water) )^(1/3) * t^(1/2)
+    FAY_K2 = 1.45
+    WATER_KINEMATIC_VISCOSITY = 1.0e-6        # m^2/s
+    GRAVITY = 9.81
+    WATER_DENSITY_KG_M3 = 1025.0
+
+
 class METOCEAN:
     """Defaults for a synthesised (demo) wind + current field."""
 

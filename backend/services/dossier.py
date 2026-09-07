@@ -126,6 +126,7 @@ def build_dossier(db: Session, investigation_id: int) -> dict:
             "horizons_h": fore.get("horizons_h"),
             "horizons": fore.get("horizons"),
             "shoreline_contact": fore.get("coastal_impact"),
+            "weathering": m.get("weathering"),
         },
 
         "ais_evidence": {
@@ -333,6 +334,21 @@ def dossier_markdown(d: dict) -> str:
               f"- {sc.get('note', '')}", ""]
     else:
         L += [f"- {sc.get('note') or 'No shoreline contact modelled in the forecast window.'}", ""]
+
+    wx = ff.get("weathering") or {}
+    if wx.get("series"):
+        L += ["## 4b. Weathering (evaporation + spreading)",
+              f"- Oil class: {wx.get('oil_class')}, water {_fmt(wx.get('water_temp_c'))} C, "
+              f"assumed initial thickness {_fmt(wx.get('assumed_initial_thickness_m'))} m "
+              f"-> initial volume ~{_fmt(wx.get('initial_volume_m3'))} m3",
+              f"- Model: {wx.get('model')}",
+              "", "| t (h) | evaporated | volume left (m3) | area (km2) | thickness (mm) |",
+              "|---:|---:|---:|---:|---:|"]
+        for s in wx["series"]:
+            L.append(f"| {_fmt(s['t_h'])} | {s['evaporated_fraction']:.0%} | "
+                     f"{_fmt(s['volume_remaining_m3'])} | {_fmt(s['area_km2'])} | "
+                     f"{_fmt(s['mean_thickness_mm'])} |")
+        L.append("")
 
     cr = d["candidate_ranking"]
     L += ["## 5. Ranked candidate vessels", ""]

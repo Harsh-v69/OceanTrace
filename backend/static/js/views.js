@@ -514,15 +514,32 @@ async function spillAnalysis(ctx, params) {
 
   async function render(iid) {
     const inv = await api.investigation(iid);
-    const sar = inv.summary_metrics?.sar || {};
+    const sm = inv.summary_metrics || {};
+    const sar = sm.sar || {};
     const dets = sar.detections || [];
+    const wx = sm.weathering || {};
+    const wxLast = (wx.series || []).slice(-1)[0] || {};
+    const iou = sm.iou;
     $("#sa-body").innerHTML = `
       <div class="kpis">
         ${kpi(h(sar.scene_classification || "-"), "Scene verdict")}
         ${kpi(pct(sar.confidence), "Confidence")}
         ${kpi(sar.counts?.dark_spots ?? sar.counts?.candidates ?? "-", "Dark spots")}
         ${kpi(sar.counts?.oil_like ?? dets.length, "Oil-like")}
+        ${iou ? kpi(num(iou.value, 3), "IoU vs ground truth") : ""}
+        ${wxLast.evaporated_fraction != null ? kpi(pct(wxLast.evaporated_fraction), `Evaporated @ ${wxLast.t_h}h`) : ""}
       </div>
+      ${wx.series ? `<div class="panel"><h2>Weathering &mdash; evaporation &amp; spreading</h2>
+        <p class="muted">${h(wx.model || "")} &middot; oil class <b>${h(wx.oil_class)}</b>,
+          water ${num(wx.water_temp_c, 0)}&deg;C, assumed initial film ${num(wx.assumed_initial_thickness_m * 1000, 2)} mm
+          &rarr; initial volume ~${num(wx.initial_volume_m3, 0)} m&sup3;.</p>
+        <table class="data"><thead><tr><th>t (h)</th><th>Evaporated</th><th>Volume left (m&sup3;)</th><th>Area (km&sup2;)</th><th>Mean thickness (mm)</th></tr></thead><tbody>${
+          wx.series.map((s) => `<tr><td>${s.t_h}</td><td>${pct(s.evaporated_fraction)}</td>
+            <td>${num(s.volume_remaining_m3, 0)}</td><td>${num(s.area_km2, 2)}</td>
+            <td>${num(s.mean_thickness_mm, 3)}</td></tr>`).join("")
+        }</tbody></table>
+        <p class="muted">Order-of-magnitude: SAR gives area, not volume &mdash; the initial volume is an explicit assumption.</p>
+      </div>` : ""}
       <div class="grid cols-2">
         <div class="panel"><h2>Pipeline stages</h2><ul class="clean">${
           (sar.pipeline || []).map((p) => `<li>${h(typeof p === "string" ? p : p.name || JSON.stringify(p))}</li>`).join("") || `<li class="muted">n/a</li>`

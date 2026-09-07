@@ -225,6 +225,16 @@ def run_full_pipeline(db: Session, spec, scene, user: User) -> tuple[Investigati
           release_window_h=hind["release_window_h"],
           coastal_contact=fore["coastal_impact"].get("will_beach"))
 
+    # weathering mass balance (Epic 4.2) over the forecast horizons
+    from backend.ml.drift.aging import weather_slick
+    _char0 = (sar["detections"][0]["characterization"] if sar["detections"] else {})
+    _mo = hind.get("provenance", {}).get("mean_conditions") or {}
+    weathering = weather_slick(
+        float(_char0.get("area_km2") or 0.0),
+        list(fore.get("horizons_h") or (6, 12, 24, 48)),
+        temp_c=_mo.get("sea_surface_temp_c") or _mo.get("water_temp_c"),
+    )
+
     # lay the scenario's AIS traffic on the *reconstructed* origin
     origin = hind["best_estimate"]
     axis = float(initial_bearing_deg(origin[0], origin[1], centroid[0], centroid[1]))
@@ -327,6 +337,7 @@ def run_full_pipeline(db: Session, spec, scene, user: User) -> tuple[Investigati
             "sar": _sar_view(sar),
             "hindcast": _trim_hindcast(hind),
             "forecast": _trim_forecast(fore),
+            "weathering": weathering,
             "drift_frames": {"hindcast": hind_frames, "forecast": fore_frames},
             "attribution": _trim_ranking(ranking),
             "feedback_loop": {

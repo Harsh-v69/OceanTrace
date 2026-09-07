@@ -10,9 +10,18 @@ python-multipart>=0.0.9          # OAuth2 form login
 
 # --- data model ----------------------------------------------------------
 SQLAlchemy>=2.0
+alembic>=1.13                   # schema migrations (Epic 4.1); SQLite + PostgreSQL
 pydantic>=2.6
 pydantic-settings>=2.2
 email-validator>=2.1
+
+# --- PostgreSQL + PostGIS (optional; Epic 4.1) ------------------------
+# SQLite is the tested default. To run on PostgreSQL/PostGIS set
+# DATABASE_URL=postgresql+psycopg://user:pass@host/oceantrace and install:
+#   pip install "psycopg[binary]" geoalchemy2
+# enable_postgis() then issues CREATE EXTENSION IF NOT EXISTS postgis on boot.
+# psycopg[binary]>=3.1
+# geoalchemy2>=0.15
 
 # --- security ----------------------------------------------------------
 PyJWT>=2.8

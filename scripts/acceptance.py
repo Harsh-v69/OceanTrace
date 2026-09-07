@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-End-to-end acceptance test for the OceanTrace prototype (26 checkpoints).
+End-to-end acceptance test for the OceanTrace prototype (30 checkpoints).
 
 Drives the running application through its whole intended lifecycle - in-process
 via ``TestClient`` (no network), fully offline, on one CPU core - and prints a
@@ -378,6 +378,53 @@ def run_acceptance() -> tuple[list[tuple[int, str, bool, str]], dict]:
             _assert("424242424" in vs, "ingested vessel not persisted")
             return f"{b['rows_ingested']} rows -> {b['vessels']} vessel(s); prime {b.get('prime_suspect')}"
         c.do("Ingest custom AIS CSV -> re-attribution", _ingest_ais)
+
+        # 29 - oil weathering physics on the spill scenario (Epic 4.2)
+        def _weathering():
+            w = state["m"].get("weathering")
+            _assert(isinstance(w, dict) and w.get("series"), "no weathering block on the scenario")
+            ser = w["series"]
+            _assert(ser[0]["evaporated_fraction"] == 0.0, "t=0 must have zero evaporation")
+            fr = [p["evaporated_fraction"] for p in ser]
+            _assert(fr == sorted(fr) and fr[-1] <= 0.75, f"evaporation not monotone/bounded: {fr}")
+            th = [p["mean_thickness_mm"] for p in ser]
+            _assert(th[-1] <= th[0] + 1e-9, "slick should not thicken as it weathers")
+            return (f"{w['oil_class']} @ {w['water_temp_c']}C: "
+                    f"evap 0 -> {fr[-1] * 100:.1f}% over {ser[-1]['t_h']}h")
+        c.do("Oil weathering: Fingas evaporation + Fay spreading series", _weathering)
+
+        # 30 - Alembic migrations build a schema that matches the ORM models (Epic 4.1)
+        def _migrations():
+            import sqlite3
+            from alembic import command
+            from alembic.config import Config
+            import backend.models  # noqa: F401
+            from backend.core.database import Base
+
+            mig_db = Path(tempfile.gettempdir()) / "sn_acceptance_alembic.db"
+            if mig_db.exists():
+                mig_db.unlink()
+            url = f"sqlite:///{mig_db.as_posix()}"
+            saved_url = settings.DATABASE_URL
+            settings.DATABASE_URL = url
+            try:
+                cfg = Config(str(ROOT / "alembic.ini"))
+                cfg.set_main_option("script_location", str(ROOT / "alembic"))
+                cfg.set_main_option("sqlalchemy.url", url)
+                command.upgrade(cfg, "head")
+                command.check(cfg)          # raises on model/migration drift
+                con = sqlite3.connect(mig_db)
+                built = {r[0] for r in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                con.close()
+            finally:
+                settings.DATABASE_URL = saved_url
+                if mig_db.exists():
+                    mig_db.unlink()
+            missing = set(Base.metadata.tables) - built
+            _assert(not missing, f"migration missing tables: {missing}")
+            return f"alembic head builds {len(Base.metadata.tables)} tables, no drift"
+        c.do("Alembic migration parity: upgrade head == ORM metadata", _migrations)
 
     for k, v in _saved.items():          # leave the shared settings singleton as we found it
         setattr(settings, k, v)
