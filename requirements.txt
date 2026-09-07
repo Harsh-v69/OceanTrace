@@ -64,3 +64,8 @@ tifffile>=2024.1           # GeoTIFF ingestion (no GDAL / rasterio needed)
 # --- dev / test --------------------------------------------------------
 httpx>=0.27
 pytest>=8.0
+
+# --- temporary public demo (scripts/deploy_live.py) -------------------
+# Live-reloading uvicorn + an ngrok HTTPS tunnel. pyngrok fetches the ngrok
+# binary on first run; needs a free authtoken (ngrok config add-authtoken ...).
+pyngrok>=7.2

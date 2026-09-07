@@ -1,6 +1,8 @@
 /* The single network seam. Every view talks to the backend through this module. */
 
-const BASE = "/api/v1";
+/* Relative to whatever origin served the console - localhost, a LAN IP, or a
+   public tunnel (ngrok/Cloudflare) - so the same build works everywhere. */
+const BASE = `${window.location.origin}/api/v1`;
 const TOKEN_KEY = "sn.token";
 const USER_KEY = "sn.user";
 
