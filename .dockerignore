@@ -1,0 +1,30 @@
+# Keep the build context small and reproducible.
+.venv/
+venv/
+env/
+.git/
+.github/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.claude/
+
+# Local runtime state - never ship it into the image.
+.env
+data/*.db
+data/*.sqlite3
+data/jobs/
+data/synthetic/
+data/metocean_cache/
+data/alembic_test.db
+
+# Big raw source asset that is git-ignored anyway.
+backend/static/data/indian_coastline.geojson
+
+# Editor / OS cruft.
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
