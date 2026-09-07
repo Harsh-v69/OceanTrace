@@ -40,6 +40,7 @@ def info() -> dict:
             "ml_lazy_load": settings.ML_LAZY_LOAD,
             "sms_provider": settings.SMS_PROVIDER,
         },
+        "open_registration": settings.ALLOW_OPEN_REGISTRATION,
         "alert_confidence_threshold": settings.ALERT_CONFIDENCE_THRESHOLD,
     }
 

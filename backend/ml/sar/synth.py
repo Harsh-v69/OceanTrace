@@ -1,7 +1,7 @@
 """
 Physics-based Sentinel-1-like SAR radiometry, standalone.
 
-Ported from SAMUDRA NETRA ``simulator/sar_scene.py`` but decoupled from the
+Ported from OceanTrace ``simulator/sar_scene.py`` but decoupled from the
 MetOcean/drift stack: it takes a scalar (or array) wind field directly. Used
 ONLY to build the bundled offline demo scene - the real pipeline never imports
 it. A detector tuned on this radiometry transfers to real Sentinel-1 data

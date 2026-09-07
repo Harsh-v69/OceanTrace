@@ -37,14 +37,22 @@ async def lifespan(_app: FastAPI):
     init_db()
     log.info("Database ready: %s", settings.DATABASE_URL)
 
-    if settings.SEED_DEMO_JURISDICTIONS:
+    if settings.SEED_DEMO_JURISDICTIONS or settings.SEED_DEFAULT_USERS:
         from backend.core.database import SessionLocal
-        from backend.services.jurisdiction import seed_demo_jurisdictions
 
         with SessionLocal() as db:
-            n = seed_demo_jurisdictions(db)
-        if n:
-            log.info("Seeded %d demo maritime jurisdiction(s)", n)
+            if settings.SEED_DEMO_JURISDICTIONS:
+                from backend.services.jurisdiction import seed_demo_jurisdictions
+
+                n = seed_demo_jurisdictions(db)
+                if n:
+                    log.info("Seeded %d demo maritime jurisdiction(s)", n)
+            if settings.SEED_DEFAULT_USERS:
+                from backend.services.users import seed_default_users
+
+                m = seed_default_users(db)
+                if m:
+                    log.info("Seeded %d default user account(s)", m)
 
     yield
     log.info("Shutdown complete")
@@ -78,9 +86,22 @@ def create_app() -> FastAPI:
     # ---- Operations Console (single unified app - no separate Streamlit) ----
     static_dir = Path(__file__).parent / "static"
     if static_dir.is_dir():
+
+        class _ConsoleStatic(StaticFiles):
+            """Serve the SPA with revalidate-always caching so an updated build
+            is never masked by a stale browser copy."""
+
+            async def get_response(self, path, scope):  # noqa: ANN001
+                resp = await super().get_response(path, scope)
+                resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+                return resp
+
+            def is_not_modified(self, response_headers, request_headers) -> bool:  # noqa: ANN001
+                return False
+
         app.mount(
             "/app",
-            StaticFiles(directory=str(static_dir), html=True),
+            _ConsoleStatic(directory=str(static_dir), html=True),
             name="console",
         )
 

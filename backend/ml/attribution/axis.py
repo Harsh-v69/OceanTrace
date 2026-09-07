@@ -1,7 +1,7 @@
 """
 Slick-axis alignment  (attribution criterion 2).
 
-Ported from SAMUDRA NETRA ``ml/ais/scoring.py::axis_alignment_score``.
+Ported from OceanTrace ``ml/ais/scoring.py::axis_alignment_score``.
 
 A slick laid by a moving, continuously-discharging vessel lies ALONG that
 vessel's course. The reverse-drift direction - from the reconstructed origin

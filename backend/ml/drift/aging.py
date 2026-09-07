@@ -1,7 +1,7 @@
 """
 Slick age inversion  (release-time window).
 
-Ported from SAMUDRA NETRA ``ml/drift/weathering.py`` - only the two pure
+Ported from OceanTrace ``ml/drift/weathering.py`` - only the two pure
 functions the hindcast needs. A drifting filament of passive tracer spreads
 diffusively, so its cross-drift positions are Gaussian with variance
 ``sigma^2 = sigma0^2 + 2*K_h*t``. Inverting the observed width gives an age

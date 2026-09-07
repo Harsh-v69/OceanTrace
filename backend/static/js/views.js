@@ -1,8 +1,11 @@
 /* All screens for the Operations Console. Each view renders into ctx.root and
    wires its own events. ctx = { user, root, go, toast }. */
 
-import { api, fetchText } from "./api.js";
-import { makeMap, anomalyMarker, vesselMarker, trackLine, polygon, fit, L } from "./map.js";
+import { api, fetchText } from "./api.js?v=epic1";
+import {
+  makeMap, anomalyMarker, vesselMarker, trackLine, polygon, fit, L,
+  vesselTrackLayer, vesselPopupHtml,
+} from "./map.js?v=epic1";
 
 /* -------------------------------------------------------------- helpers -- */
 const h = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -88,16 +91,27 @@ async function missionControl(ctx) {
   const [invs, scen] = await Promise.all([loadInvestigations(), api.scenarios().catch(() => ({ scenarios: [] }))]);
 
   const markers = [];
-  let confSum = 0, confN = 0, alertN = 0;
+  let confSum = 0, confN = 0, alertN = 0, vesselN = 0;
   for (const inv of invs) {
     if (inv.centroid_lat == null) continue;
-    const c = inv.summary_metrics?.sar?.confidence;
+    const sm = inv.summary_metrics || {};
+    const c = sm.sar?.confidence;
     const m = anomalyMarker(map, inv.centroid_lat, inv.centroid_lon, {
-      confidence: c ?? 0, label: inv.summary_metrics?.sar?.scene_classification || "Anomaly", ref: inv.reference,
+      confidence: c ?? 0, label: sm.sar?.scene_classification || "Anomaly", ref: inv.reference,
     });
     m.on("click", () => ctx.go(`#/workstation/${inv.id}`));
     markers.push(m);
     if (c != null) { confSum += c; confN += 1; }
+    // draw the prime suspect's reconstructed track for this investigation
+    const vts = sm.vessel_tracks || {};
+    const prime = Object.values(vts).find((v) => v?.attribution?.is_prime);
+    if (prime && prime.pings?.length) {
+      const { group } = vesselTrackLayer(map, prime, {
+        prime: true,
+        onClick: () => ctx.go(`#/workstation/${inv.id}`),
+      });
+      markers.push(group); vesselN += 1;
+    }
   }
   if (markers.length) fit(map, markers);
 
@@ -110,6 +124,7 @@ async function missionControl(ctx) {
     kpi(invs.length, "Investigations") +
     kpi(invs.filter((i) => i.status === "IN_PROGRESS").length, "In progress") +
     kpi(confN ? pct(confSum / confN) : "-", "Avg confidence") +
+    kpi(vesselN || "-", "Tracked suspects") +
     kpi(alertN || "-", "Alerts delivered");
 
   $("#mc-scenarios").innerHTML = scen.scenarios.map((s) =>
@@ -259,9 +274,11 @@ async function workstation(ctx, params) {
     </div>
     <div class="workstation">
       <div class="wcol">
-        <div class="panel"><h2>Scene &amp; drift</h2><div id="ws-map" class="map sm"></div>
+        <div class="panel"><h2>Scene, drift &amp; vessel tracks</h2><div id="ws-map" class="map sm"></div>
           <div class="timeline"><div class="tl-label"><span>T-48h</span><span id="ws-tl-now">observation (T0)</span><span>T+48h</span></div>
           <input type="range" id="ws-tl" min="-48" max="48" value="0" step="1"></div>
+          <p class="muted" style="font-size:.78rem">Red = prime suspect track · amber ring = loitering · dashed red = AIS blackout. Drag the slider to walk each vessel to its position at that time.</p>
+          <div id="ws-vessel" class="finding" hidden></div>
         </div>
       </div>
       <div class="wcol">
@@ -314,25 +331,44 @@ async function workstation(ctx, params) {
   if (hind.confidence_ellipse?.length)
     polygon(map, hind.confidence_ellipse, { color: "#66c2ff", fillOpacity: 0.05, lonlat: guessLonLat(hind.confidence_ellipse) });
 
-  // vessels: last known position of each candidate
+  // vessels: reconstructed track per candidate (prime in red), clickable
+  const vts = m.vessel_tracks || {};
+  const vesselLayers = [];
   for (const c of cands) {
-    const p = c.detail?.last_point || c.last_point;
-    // fall back: use the CPA/first point stashed in spatiotemporal detail if present
+    const view = vts[String(c.identity.mmsi)];
+    if (!view || !view.pings?.length) continue;
+    const lyr = vesselTrackLayer(map, view, {
+      prime: c.rank === 1,
+      onClick: (v) => showVesselDetail(v),
+    });
+    vesselLayers.push(lyr);
+    layers.push(lyr.group);
+  }
+  function showVesselDetail(view) {
+    const box = $("#ws-vessel");
+    if (!box) return;
+    box.hidden = false;
+    box.innerHTML = vesselPopupHtml(view);
+  }
+  if (cands[0]) {
+    const pv = vts[String(cands[0].identity.mmsi)];
+    if (pv) showVesselDetail(pv);
   }
 
   const frames = m.drift_frames || { hindcast: [], forecast: [] };
   let driftLayer = null;
   function showFrame(t) {
     if (driftLayer) { map.removeLayer(driftLayer); driftLayer = null; }
+    for (const lyr of vesselLayers) lyr.positionAt(t);
     const pool = t <= 0 ? frames.hindcast : frames.forecast;
-    if (!pool || !pool.length) return;
-    // nearest frame by |t_h|
-    let best = pool[0];
-    for (const f of pool) if (Math.abs(Math.abs(f.t_h) - Math.abs(t)) < Math.abs(Math.abs(best.t_h) - Math.abs(t))) best = f;
-    const pts = (best.points || []).map((p) => [p[0], p[1]]);
-    driftLayer = L.layerGroup(pts.map((p) => L.circleMarker(p, {
-      radius: 2, color: t <= 0 ? "#f0b429" : "#2ea6ff", weight: 0, fillOpacity: 0.5,
-    }))).addTo(map);
+    if (pool && pool.length) {
+      let best = pool[0];
+      for (const f of pool) if (Math.abs(Math.abs(f.t_h) - Math.abs(t)) < Math.abs(Math.abs(best.t_h) - Math.abs(t))) best = f;
+      const pts = (best.points || []).map((p) => [p[0], p[1]]);
+      driftLayer = L.layerGroup(pts.map((p) => L.circleMarker(p, {
+        radius: 2, color: t <= 0 ? "#f0b429" : "#2ea6ff", weight: 0, fillOpacity: 0.5,
+      }))).addTo(map);
+    }
     $("#ws-tl-now").textContent = t === 0 ? "observation (T0)" : `T${t > 0 ? "+" : ""}${t} h (${t < 0 ? "hindcast" : "forecast"})`;
   }
   $("#ws-tl").addEventListener("input", (e) => showFrame(Number(e.target.value)));
@@ -358,14 +394,22 @@ async function vesselIntel(ctx) {
 
   async function render(id) {
     const inv = await api.investigation(id);
-    const cands = inv.summary_metrics?.attribution?.candidates || [];
+    const sm = inv.summary_metrics || {};
+    const cands = sm.attribution?.candidates || [];
+    const vts = sm.vessel_tracks || {};
     $("#vi-body").innerHTML = cands.map((c) => {
       const cc = c.components || {};
       const ae = cc.ais_anomaly?.detail || {};
       const rd = cc.route_deviation?.detail || {};
       const bl = cc.blackout?.detail || {};
       const st = cc.spatiotemporal?.detail || {};
+      const tv = vts[String(c.identity.mmsi)] || {};
+      const tvm = tv.metrics || {};
       return `<div class="panel"><h2>#${c.rank} ${h(c.identity.name)} <span class="muted mono">MMSI ${h(c.identity.mmsi)}</span></h2>
+        <p class="muted">Track: ${tvm.n_points ?? "-"} pings over ${num(tvm.duration_h, 1)} h ·
+          ${num(tvm.sog_min_kn, 1)}–${num(tvm.sog_max_kn, 1)} kn ·
+          heading ${tvm.mean_heading_deg != null ? num(tvm.mean_heading_deg, 0) + "°" : "-"} ·
+          ${(tv.loiter || []).length} loiter span(s) · ${(tv.blackouts || []).length} AIS gap(s)</p>
         <div class="grid cols-3">
           <div><h3>AIS autoencoder</h3>${kv([
             ["Peak recon. error", num(ae.peak_reconstruction_error, 4)],
@@ -723,6 +767,12 @@ export function wireAuth(onAuthed) {
   tabs.forEach((t) => t.addEventListener("click", () => setMode(t.dataset.mode)));
   setMode("login");
 
+  // open self-registration is disabled by default; only expose the tab when the
+  // server says it is on (dev / test).
+  api.info().then((i) => {
+    if (i && i.open_registration) $$('#auth-tabs [data-mode="register"]').forEach((b) => (b.hidden = false));
+  }).catch(() => {});
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     msg.textContent = "";
@@ -750,6 +800,82 @@ export function wireAuth(onAuthed) {
   });
 }
 
+/* ==================================================== USER MANAGEMENT == */
+async function userManagement(ctx) {
+  ctx.root.innerHTML = page("User Management",
+    "Create and maintain operator accounts. NATIONAL manages every account; REGIONAL manages PILOT accounts inside its region.",
+    `<div id="um-body"><p class="empty">Loading&hellip;</p></div>`);
+
+  let scope, users, zones;
+  try {
+    [scope, users, zones] = await Promise.all([
+      api.userScope(), api.users(),
+      api.jurisdictions({ with_geometry: false }).catch(() => []),
+    ]);
+  } catch (e) {
+    $("#um-body").innerHTML = `<p class="empty">${e.status === 403 ? "User management requires REGIONAL or NATIONAL role." : h(e.message)}</p>`;
+    return;
+  }
+  const zoneById = Object.fromEntries(zones.map((z) => [z.id, z.code]));
+  const closure = scope.jurisdiction_closure_ids; // null = all
+  const pickZones = (closure == null ? zones : zones.filter((z) => closure.includes(z.id)))
+    .filter((z) => z.type === "COASTAL_STATE" || z.type === "MARITIME_REGION");
+
+  $("#um-body").innerHTML = `
+    <div class="panel"><h2>Create account</h2>
+      <form id="um-form" class="row" style="align-items:flex-end;gap:.7rem;flex-wrap:wrap">
+        <label>Name<input name="name" required></label>
+        <label>Email<input name="email" type="email" required></label>
+        <label>Temp. password<input name="password" type="password" minlength="8" required></label>
+        <label>Role<select name="role">${scope.can_create_roles.map((r) => `<option>${r}</option>`).join("")}</select></label>
+        <label>Mobile<input name="phone_number" placeholder="+15005550006"></label>
+        <label>Zones<select name="zones" multiple size="4">${
+          pickZones.map((z) => `<option value="${h(z.code)}">${h(z.code)} - ${h(z.name)}</option>`).join("")
+        }</select></label>
+        <button class="btn btn-primary" type="submit">Create</button>
+        <span id="um-msg" class="muted"></span>
+      </form>
+      <p class="muted">PILOT/REGIONAL accounts need at least one zone. The user changes the temporary password after first sign-in via Profile.</p>
+    </div>
+    <div class="panel"><h2>Accounts (${users.length})</h2>
+      <table class="data"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Zones</th><th>Status</th><th></th></tr></thead>
+      <tbody id="um-rows">${users.map((u) => `<tr data-id="${u.id}">
+        <td>${h(u.name)}</td><td class="mono">${h(u.email)}</td>
+        <td><span class="badge ${u.role === "NATIONAL" ? "crit" : u.role === "REGIONAL" ? "warn" : "info"}">${h(u.role)}</span></td>
+        <td class="mono">${(u.jurisdiction_ids || []).map((i) => zoneById[i] || i).join(", ") || "-"}</td>
+        <td>${u.active ? '<span class="badge ok">active</span>' : '<span class="badge mut">disabled</span>'}</td>
+        <td><button class="btn sm" data-toggle="${u.id}" data-on="${u.active ? 0 : 1}">${u.active ? "Disable" : "Enable"}</button></td>
+      </tr>`).join("") || `<tr><td colspan="6" class="empty">No manageable accounts.</td></tr>`}</tbody></table>
+    </div>`;
+
+  $("#um-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const codes = [...e.target.zones.selectedOptions].map((o) => o.value);
+    const btn = e.target.querySelector("button[type=submit]");
+    btn.disabled = true; $("#um-msg").textContent = "Creating...";
+    try {
+      await api.createUser({
+        name: fd.get("name").trim(), email: fd.get("email").trim(),
+        password: fd.get("password"), role: fd.get("role"),
+        phone_number: (fd.get("phone_number") || "").trim() || null,
+        jurisdiction_codes: codes,
+      });
+      ctx.toast("Account created.");
+      userManagement(ctx);
+    } catch (err) {
+      $("#um-msg").textContent = Array.isArray(err.detail)
+        ? err.detail.map((d) => d.msg).join("; ") : (err.detail || err.message);
+      btn.disabled = false;
+    }
+  });
+  $$("#um-rows [data-toggle]").forEach((b) => b.addEventListener("click", async () => {
+    b.disabled = true;
+    try { await api.setUserActive(b.dataset.toggle, b.dataset.on === "1"); userManagement(ctx); }
+    catch (e) { ctx.toast(e.detail || e.message, true); b.disabled = false; }
+  }));
+}
+
 /* ============================================================ EXPORT == */
 export const views = {
   "mission-control": missionControl,
@@ -762,6 +888,7 @@ export const views = {
   "evidence": evidence,
   "alerts": alerts,
   "analytics": analytics,
+  "users": userManagement,
   "system": system,
   "profile": profile,
 };
@@ -777,6 +904,7 @@ export const NAV = [
   { id: "evidence", label: "Evidence", min: "PILOT" },
   { id: "alerts", label: "Alerts", min: "REGIONAL" },
   { id: "analytics", label: "Analytics", min: "REGIONAL" },
+  { id: "users", label: "User Management", min: "REGIONAL" },
   { id: "system", label: "System", min: "PILOT" },
   { id: "profile", label: "Profile", min: "PILOT" },
 ];

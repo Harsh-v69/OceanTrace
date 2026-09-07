@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Final 24-point acceptance test for the unified SAMUDRA NETRA x POSEatSea prototype.
+End-to-end acceptance test for the OceanTrace prototype (26 checkpoints).
 
 Drives the running application through its whole intended lifecycle - in-process
 via ``TestClient`` (no network), fully offline, on one CPU core - and prints a
@@ -8,7 +8,7 @@ numbered PASS/FAIL table.
 
     python scripts/acceptance.py
 
-Exit code 0 iff all 24 checkpoints pass. Also importable: ``run_acceptance()``
+Exit code 0 iff every checkpoint passes. Also importable: ``run_acceptance()``
 returns ``(results, timings)`` and is exercised by
 ``backend/tests/test_acceptance.py``.
 """
@@ -29,9 +29,14 @@ os.environ.setdefault("JWT_SECRET_KEY", "acceptance-secret-0123456789abcdef01234
 os.environ.setdefault("ENV", "test")
 os.environ.setdefault("ALLOW_REGISTRATION_ROLE_SELECT", "true")
 os.environ.setdefault("SMS_PROVIDER", "mock")
+# Epic 1: open self-registration is CLOSED; the three role accounts are seeded.
+os.environ.setdefault("SEED_DEFAULT_USERS", "true")
+os.environ.setdefault("DEFAULT_USER_PASSWORD", "Acceptance!Seed1")
 
 API = "/api/v1"
-PW = "Passw0rd!secure"
+PW = "Acceptance!Seed1"          # the seeded default-account password
+NATIONAL = "national@oceantrace.gov.in"
+REGIONAL = "regional@oceantrace.gov.in"
 MUMBAI = "mumbai-high-confidence"
 LOOKALIKE = "lookalike-darkpatch"
 
@@ -63,11 +68,30 @@ def run_acceptance() -> tuple[list[tuple[int, str, bool, str]], dict]:
     from fastapi.testclient import TestClient
 
     import backend.models  # noqa: F401  register mappers
-    from backend.core.database import Base, engine
+    from backend.core.config import settings
+    from backend.core.database import Base, SessionLocal, engine
     from backend.main import app
     from backend.services import sms as sms_svc
 
+    # This runs both standalone and inside the pytest suite, where conftest has
+    # already fixed the environment. Force the settings this checklist needs so
+    # it never depends on import order, and restore them afterwards so the rest
+    # of the suite is untouched.
+    _saved = {k: getattr(settings, k) for k in
+              ("ALLOW_OPEN_REGISTRATION", "SEED_DEFAULT_USERS", "DEFAULT_USER_PASSWORD", "SMS_PROVIDER")}
+    settings.ALLOW_OPEN_REGISTRATION = False
+    settings.SEED_DEFAULT_USERS = True
+    settings.DEFAULT_USER_PASSWORD = PW
+    settings.SMS_PROVIDER = "mock"
+
     Base.metadata.create_all(bind=engine)
+    from backend.services.jurisdiction import seed_demo_jurisdictions
+    from backend.services.users import seed_default_users
+
+    with SessionLocal() as _db:
+        seed_demo_jurisdictions(_db)
+        seed_default_users(_db, password=PW)
+
     sms_svc.reset_sms_provider()
     mock = sms_svc.get_sms_provider()
 
@@ -81,16 +105,19 @@ def run_acceptance() -> tuple[list[tuple[int, str, bool, str]], dict]:
             f"{len(client.get(f'{API}/jurisdictions', headers=_h(client, _nat(client))).json())} zones",
         )[1])
 
-        # 2 - register a PILOT (assigned to Mumbai / Maharashtra)
-        def _reg_pilot():
-            r = client.post(f"{API}/auth/register", json={
+        # 2 - open self-registration is CLOSED; NATIONAL admin creates a PILOT
+        def _create_pilot():
+            reg = client.post(f"{API}/auth/register", json={
+                "name": "Nope", "email": "nope@example.com", "password": PW, "role": "PILOT"})
+            _assert(reg.status_code == 403, f"open register should be 403, got {reg.status_code}")
+            r = client.post(f"{API}/users", headers=_h(client, NATIONAL), json={
                 "name": "Acceptance Pilot", "email": "acc.pilot@example.com",
                 "password": PW, "role": "PILOT", "phone_number": "+15005550111",
                 "jurisdiction_codes": ["IN-MH"],
             })
             _assert(r.status_code == 201, r.text)
-            return "PILOT acc.pilot@example.com -> IN-MH"
-        c.do("Register a PILOT user", _reg_pilot)
+            return "self-register -> 403; NATIONAL POST /users -> PILOT acc.pilot@ (IN-MH)"
+        c.do("Hierarchical user creation (open self-registration disabled)", _create_pilot)
 
         # 3 - PILOT logs in, JWT issued
         def _login():
@@ -110,10 +137,10 @@ def run_acceptance() -> tuple[list[tuple[int, str, bool, str]], dict]:
 
         # 5 - PILOT is refused outside their zone (Kerala scenario centre)
         def _out_of_zone():
-            reg = client.post(f"{API}/auth/register", json={
+            r = client.post(f"{API}/users", headers=_h(client, NATIONAL), json={
                 "name": "KL Pilot", "email": "acc.kl@example.com", "password": PW,
                 "role": "PILOT", "jurisdiction_codes": ["IN-KL"]})
-            _assert(reg.status_code == 201, reg.text)
+            _assert(r.status_code == 201, r.text)
             tok = client.post(f"{API}/auth/login",
                               data={"username": "acc.kl@example.com", "password": PW}).json()["access_token"]
             r = client.post(f"{API}/scenarios/{MUMBAI}/run", headers={"Authorization": f"Bearer {tok}"})
@@ -266,6 +293,42 @@ def run_acceptance() -> tuple[list[tuple[int, str, bool, str]], dict]:
         c.do("Evidence dossier export - Markdown", lambda: _dossier(client, state, ".md", "text/plain"))
         c.do("Evidence dossier export - HTML (printable / PDF)", lambda: _dossier(client, state, ".html", "text/html"))
 
+        # 25 - vessel tracking engine (Epic 1)
+        def _vessels():
+            nat = _h(client, NATIONAL)
+            rows = client.get(f"{API}/vessels", headers=nat).json()
+            _assert(rows, "scenario run created no Vessel rows")
+            culprit = "419810001"
+            v = client.get(f"{API}/vessels/{culprit}?investigation_id={state['inv_id']}", headers=nat).json()
+            _assert(v["track"] and v["track"]["pings"], "no reconstructed track for the prime suspect")
+            _assert(v["attribution"]["is_prime"] is True, "prime flag missing on the track view")
+            t = client.get(f"{API}/vessels/{culprit}/track?investigation_id={state['inv_id']}", headers=nat).json()
+            _assert({"pings", "loiter", "blackouts", "metrics"} <= set(t), "track view shape")
+            return (f"{len(rows)} vessels persisted; prime {v['name']} track "
+                    f"{v['metrics']['n_points']} pings, {len(t['loiter'])} loiter span(s)")
+        c.do("Vessel tracking: real Vessel rows + map-ready tracks", _vessels)
+
+        # 26 - REGIONAL admin manages its PILOTs
+        def _regional_mgmt():
+            rh = _h(client, REGIONAL)                     # seeded REGIONAL @ IN-WEST
+            r = client.post(f"{API}/users", headers=rh, json={
+                "name": "GJ Pilot", "email": "acc.gj@example.com", "password": PW,
+                "role": "PILOT", "jurisdiction_codes": ["IN-GJ"]})
+            _assert(r.status_code == 201, r.text)                       # IN-GJ is inside IN-WEST
+            bad = client.post(f"{API}/users", headers=rh, json={
+                "name": "TN Pilot", "email": "acc.tn@example.com", "password": PW,
+                "role": "PILOT", "jurisdiction_codes": ["IN-TN"]})
+            _assert(bad.status_code == 403, "REGIONAL must not create a PILOT outside its region")
+            pid = r.json()["id"]
+            _assert(client.post(f"{API}/users/{pid}/disable", headers=rh).status_code == 200)
+            login = client.post(f"{API}/auth/login",
+                                data={"username": "acc.gj@example.com", "password": PW})
+            _assert(login.status_code == 403, "disabled account must not log in")
+            return "REGIONAL created + disabled a PILOT in-region; out-of-region create = 403"
+        c.do("Hierarchical management: REGIONAL scoped to its region", _regional_mgmt)
+
+    for k, v in _saved.items():          # leave the shared settings singleton as we found it
+        setattr(settings, k, v)
     return c.results, state.get("timings", {})
 
 
@@ -279,12 +342,7 @@ def _assert(cond, msg="") -> bool:
 
 
 def _nat(client) -> str:
-    if not hasattr(_nat, "_cache"):
-        client.post("/api/v1/auth/register", json={
-            "name": "Acceptance National", "email": "acc.nat@example.com",
-            "password": PW, "role": "NATIONAL"})
-        _nat._cache = "acc.nat@example.com"
-    return _nat._cache
+    return NATIONAL          # seeded at startup (SEED_DEFAULT_USERS)
 
 
 def _h(client, email) -> dict:
@@ -309,7 +367,7 @@ def main() -> int:
     elapsed = time.perf_counter() - t0
 
     print("=" * 82)
-    print("FINAL 24-POINT ACCEPTANCE TEST".center(82))
+    print("OCEANTRACE ACCEPTANCE TEST".center(82))
     print("=" * 82)
     for n, label, passed, detail in results:
         mark = "PASS" if passed else "FAIL"

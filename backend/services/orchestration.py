@@ -41,6 +41,7 @@ from backend.services import drift as drift_svc
 from backend.services import jurisdiction as juris_svc
 from backend.services import sms as sms_svc
 from backend.services import satellite as satellite_svc
+from backend.services import vessels as vessels_svc
 
 log = get_logger("backend.services.orchestration")
 
@@ -247,6 +248,35 @@ def run_full_pipeline(db: Session, spec, scene, user: User) -> tuple[Investigati
           prime_score=ranking["summary"].get("prime_score") if ranking.get("summary") else None,
           feedback_iterations=fb["n_iterations"], converged=fb["converged"])
 
+    # ---- vessel tracking: persist Vessel rows + build map-ready track views
+    vessel_ids: dict[str, int] = {}
+    vessel_views: dict[str, dict] = {}
+    if tracks:
+        all_records = [r for t in tracks for r in t.get("records", [])]
+        vproc = vessels_svc.process_ais_records(all_records, obs_iso)
+        vtracks = vproc["tracks"]
+        vessel_ids = vessels_svc.persist_vessels(db, vtracks, last_seen_at=spec.obs_time)
+        vessel_views = vessels_svc.build_track_views(
+            vtracks, window_h=hind["release_window_h"],
+        )
+        # fold the fusion result (score, AE, route-deviation) onto each track view
+        for cand in ranking.get("candidates", []):
+            m = str(cand["identity"]["mmsi"])
+            if m not in vessel_views:
+                continue
+            comps = cand.get("components", {})
+            vessel_views[m]["attribution"] = {
+                "rank": cand.get("rank"),
+                "score": cand.get("score"),
+                "assessment": cand.get("assessment"),
+                "is_prime": cand.get("rank") == 1,
+                "best_match_time_h": cand.get("best_match_time_h"),
+                "cpa_km": cand.get("cpa_km"),
+                "ais_anomaly": (comps.get("ais_anomaly") or {}).get("detail"),
+                "route_deviation": (comps.get("route_deviation") or {}).get("detail"),
+            }
+            vessel_views[m]["vessel_id"] = vessel_ids.get(m)
+
     # ---- STEP 7: jurisdiction --------------------------------------
     _lap()
     juris = juris_svc.resolve_affected_jurisdictions(db, centroid[0], centroid[1])
@@ -306,6 +336,7 @@ def run_full_pipeline(db: Session, spec, scene, user: User) -> tuple[Investigati
             "jurisdiction": _juris_view(juris),
             "environmental_field": hind.get("environmental_field"),
             "met_ocean": hind.get("provenance", {}).get("mean_conditions"),
+            "vessel_tracks": vessel_views,
             "pipeline_steps": steps,
             "timings": timings,
             "caveats": [ranking.get("caveat"),
@@ -313,7 +344,7 @@ def run_full_pipeline(db: Session, spec, scene, user: User) -> tuple[Investigati
             "generated_at": datetime.now(timezone.utc).isoformat(),
         },
         anomaly_type=AnomalyType.OIL_LIKE, confidence=sar["confidence"], alert=alert,
-        ranking=ranking,
+        ranking=ranking, vessel_ids=vessel_ids,
     )
     log.info("orchestration: %s -> investigation %s (%s, alert=%s)",
              spec.key, inv.reference, scene_class, alert.status.value if alert else "none")
@@ -360,7 +391,7 @@ def _juris_view(juris: dict) -> dict:
 
 
 def _persist(db, spec, user, *, status, centroid, jurisdiction, summary_metrics,
-             anomaly_type, confidence, alert, ranking=None) -> Investigation:
+             anomaly_type, confidence, alert, ranking=None, vessel_ids=None) -> Investigation:
     inv = Investigation(
         reference=f"INV-{uuid.uuid4().hex[:8].upper()}",
         title=spec.name,
@@ -386,15 +417,25 @@ def _persist(db, spec, user, *, status, centroid, jurisdiction, summary_metrics,
     db.add(anomaly)
 
     if ranking and ranking.get("candidates"):
-        prime = ranking["candidates"][0]
-        db.add(Anomaly(
-            investigation_id=inv.id, type=AnomalyType.ROUTE_DEVIATION,
-            source=AnomalySource.FUSION, label="Attributed vessel",
-            confidence=min(prime["score"] / 100.0, 1.0),
-            occurred_at=spec.obs_time, lat=centroid[0], lon=centroid[1],
-            details={"mmsi": prime["identity"]["mmsi"], "name": prime["identity"]["name"],
-                     "score": prime["score"], "assessment": prime["assessment"]},
-        ))
+        vessel_ids = vessel_ids or {}
+        # link every scored candidate to its Vessel row so /vessels is
+        # jurisdiction-scoped through the anomaly; the prime carries the
+        # FUSION/route-deviation anomaly the dossier reads.
+        for cand in ranking["candidates"]:
+            m = str(cand["identity"]["mmsi"])
+            is_prime = cand.get("rank") == 1
+            db.add(Anomaly(
+                investigation_id=inv.id,
+                vessel_id=vessel_ids.get(m),
+                type=AnomalyType.ROUTE_DEVIATION if is_prime else AnomalyType.OTHER,
+                source=AnomalySource.FUSION,
+                label="Attributed vessel" if is_prime else "Candidate vessel",
+                confidence=min(cand["score"] / 100.0, 1.0),
+                occurred_at=spec.obs_time, lat=centroid[0], lon=centroid[1],
+                details={"mmsi": cand["identity"]["mmsi"], "name": cand["identity"]["name"],
+                         "score": cand["score"], "assessment": cand["assessment"],
+                         "rank": cand.get("rank")},
+            ))
 
     if alert is not None:
         alert.investigation_id = inv.id

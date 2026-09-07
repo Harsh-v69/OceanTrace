@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     )
 
     # ---------------------------------------------------------------- app ----
-    APP_NAME: str = "SAMUDRA NETRA x POSEatSea - Unified API"
+    APP_NAME: str = "OceanTrace - Unified API"
     APP_VERSION: str = "0.2.0"
     PROBLEM_STATEMENT_ID: str = "26143"
     ORGANISATION: str = "National Technical Research Organisation (NTRO)"
@@ -68,6 +68,13 @@ class Settings(BaseSettings):
     # Phase 2: open registration. When False, every self-registration is forced
     # to the lowest role (PILOT) and elevation is an admin-only action.
     ALLOW_REGISTRATION_ROLE_SELECT: bool = True
+    # Epic 1: hierarchical user management. When False (the default), the public
+    # POST /auth/register endpoint is closed - accounts are created only by a
+    # NATIONAL or REGIONAL admin through POST /api/v1/users.
+    ALLOW_OPEN_REGISTRATION: bool = False
+    # Idempotently seed one account per role at startup (see services/users.py).
+    SEED_DEFAULT_USERS: bool = True
+    DEFAULT_USER_PASSWORD: str = "ChangeMe!OceanTrace1"
 
     # ------------------------------------------------- twilio (SMS_PROVIDER) --
     TWILIO_ACCOUNT_SID: str | None = None
@@ -84,7 +91,7 @@ class Settings(BaseSettings):
     ALERT_DEDUP_TIME_BUCKET_MINUTES: int = 60
     ALERT_MAX_SEND_ATTEMPTS: int = 3
     ALERT_TEST_SMS_TEMPLATE: str = (
-        "SAMUDRA NETRA test alert for {name}. SMS delivery is working "
+        "OceanTrace test alert for {name}. SMS delivery is working "
         "(sent {ts})."
     )
 

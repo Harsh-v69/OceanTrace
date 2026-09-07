@@ -1,7 +1,7 @@
 """
 SAR detection constants.
 
-Ported from SAMUDRA NETRA ``config.SAR`` (see docs/MERGE_ARCHITECTURE.md, SAR
+Ported from OceanTrace ``config.SAR`` (see docs/MERGE_ARCHITECTURE.md, SAR
 detection = selected [SN]). Every value keeps its original citation. Kept as a
 plain class - no environment overrides - because these are physical/algorithmic
 constants the trained classifier depends on, not deployment knobs.

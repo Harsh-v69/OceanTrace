@@ -17,6 +17,8 @@ os.environ["DEBUG"] = "false"
 os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB.as_posix()}"
 os.environ["JWT_SECRET_KEY"] = "unit-test-secret-not-for-production-use-0123456789"
 os.environ["ALLOW_REGISTRATION_ROLE_SELECT"] = "true"
+os.environ["ALLOW_OPEN_REGISTRATION"] = "true"   # keep the /auth/register helper usable
+os.environ["SEED_DEFAULT_USERS"] = "false"        # deterministic user table per test
 os.environ["SMS_PROVIDER"] = "mock"
 
 import pytest  # noqa: E402

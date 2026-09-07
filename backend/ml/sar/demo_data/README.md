@@ -19,5 +19,5 @@ Ground truth: the pipeline should return **"Oil-like anomaly"** for the slick
 look-alike"** for the rest.
 
 The radiometry is the calibrated CMOD-family geophysical model function ported
-from SAMUDRA NETRA's simulator, so a detector tuned here transfers to real
+from OceanTrace's simulator, so a detector tuned here transfers to real
 Sentinel-1 data.

@@ -1,7 +1,7 @@
 """
 AIS data model + normalisation.
 
-Ported from SAMUDRA NETRA ``ml/ais/schema.py``. The canonical field names used
+Ported from OceanTrace ``ml/ais/schema.py``. The canonical field names used
 throughout the backend are the ones named in the Phase 5 task:
 
     mmsi, timestamp, latitude, longitude, sog, cog, heading, nav_status, vessel_type

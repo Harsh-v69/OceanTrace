@@ -23,6 +23,14 @@ router = APIRouter(prefix="/auth", tags=["auth"])
     summary="Create a new user account",
 )
 def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> User:
+    if not settings.ALLOW_OPEN_REGISTRATION:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Open self-registration is disabled. A NATIONAL or REGIONAL "
+                "administrator creates accounts via POST /api/v1/users."
+            ),
+        )
     if user_svc.get_user_by_email(db, payload.email) is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Email already registered"

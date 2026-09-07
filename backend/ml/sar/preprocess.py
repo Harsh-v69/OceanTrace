@@ -1,7 +1,7 @@
 """
 SAR pre-processing chain  (STEP 2).
 
-Ported from SAMUDRA NETRA ``ml/sar/preprocess.py``. Mirrors the ESA SNAP graph
+Ported from OceanTrace ``ml/sar/preprocess.py``. Mirrors the ESA SNAP graph
 applied to a Sentinel-1 GRD product before oil-spill analysis:
 
     Apply-Orbit-File -> Thermal-Noise-Removal -> Calibration (sigma0)

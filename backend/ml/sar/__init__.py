@@ -1,7 +1,7 @@
 """
 SAR ingestion + oil-like anomaly detection.
 
-Ported from SAMUDRA NETRA (the merge-selected SAR detector - see
+Ported from OceanTrace (the merge-selected SAR detector - see
 docs/MERGE_ARCHITECTURE.md). Pure numpy / OpenCV / scikit, CPU-only, no U-Net.
 
 Public entry point:

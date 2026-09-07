@@ -1,7 +1,7 @@
 """
 Physics-based Lagrangian drift engine (Stage B).
 
-Ported from SAMUDRA NETRA (drift physics = selected [SN], docs/MERGE_ARCHITECTURE.md).
+Ported from OceanTrace (drift physics = selected [SN], docs/MERGE_ARCHITECTURE.md).
 Pure numpy / scipy / shapely, CPU-only, deterministic given a seed.
 
     from backend.ml.drift import hindcast, forecast

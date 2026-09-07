@@ -4,7 +4,7 @@
     python -m backend.ml.sar.train
 
 The labelled dataset ``models/training_set.npz`` (X: 30 features, y: 0/1) was
-harvested by SAMUDRA NETRA's simulator sweep during the Phase 1 audit and is
+harvested by OceanTrace's simulator sweep during the Phase 1 audit and is
 committed so the model is reproducible offline without pulling in the simulator
 or the drift stack. Training takes a few seconds on CPU.
 """

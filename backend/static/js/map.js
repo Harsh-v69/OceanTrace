@@ -97,6 +97,94 @@ export function polygon(map, ring, opts = {}) {
   }).addTo(map);
 }
 
+/* ---- vessel track rendering (Epic 1.4) ---- */
+function _interpPing(pings, tH) {
+  if (!pings || !pings.length) return null;
+  if (tH <= pings[0].t_h) return [pings[0].lat, pings[0].lon];
+  if (tH >= pings[pings.length - 1].t_h) {
+    const p = pings[pings.length - 1]; return [p.lat, p.lon];
+  }
+  for (let i = 1; i < pings.length; i++) {
+    if (pings[i].t_h >= tH) {
+      const a = pings[i - 1], b = pings[i];
+      const f = (tH - a.t_h) / ((b.t_h - a.t_h) || 1);
+      return [a.lat + f * (b.lat - a.lat), a.lon + f * (b.lon - a.lon)];
+    }
+  }
+  return [pings[pings.length - 1].lat, pings[pings.length - 1].lon];
+}
+
+/**
+ * Render one reconstructed vessel track. Returns
+ * { group, endMarker, positionAt(tH) } — positionAt moves a dot for the timeline.
+ * `view` is the object from summary_metrics.vessel_tracks[mmsi] or /vessels/{mmsi}/track.
+ */
+export function vesselTrackLayer(map, view, opts = {}) {
+  const pings = view?.pings || [];
+  const g = L.layerGroup().addTo(map);
+  if (pings.length < 1) return { group: g, endMarker: null, positionAt: () => {} };
+
+  const prime = opts.prime ?? view?.attribution?.is_prime;
+  const color = opts.color || (prime ? "#ff6b6b" : "#8aa0bd");
+  const latlngs = pings.map((p) => [p.lat, p.lon]);
+
+  if (latlngs.length > 1) {
+    L.polyline(latlngs, { color, weight: prime ? 3 : 2, opacity: 0.9 }).addTo(g);
+  }
+  // blackout gaps as dashed segments between the fixes bracketing each gap
+  for (const b of (view.blackouts || [])) {
+    const a = _interpPing(pings, b.start_h), c = _interpPing(pings, b.end_h);
+    if (a && c) L.polyline([a, c], { color: "#ff6b6b", weight: 2, dashArray: "3 6", opacity: 0.9 })
+      .addTo(g).bindPopup(`AIS dark ${Math.round(b.minutes)} min`);
+  }
+  // loiter spans as amber rings at their midpoint
+  for (const s of (view.loiter || [])) {
+    const mid = _interpPing(pings, (s.start_h + s.end_h) / 2);
+    if (mid) L.circleMarker(mid, { radius: 7, color: "#f0b429", weight: 2, fillOpacity: 0.15 })
+      .addTo(g).bindPopup(`Loitering ${Math.round(s.minutes)} min @ ${s.mean_sog_kn} kn`);
+  }
+  // start (hollow) + end (vessel glyph)
+  L.circleMarker(latlngs[0], { radius: 4, color, weight: 2, fillOpacity: 0 }).addTo(g);
+  const end = latlngs[latlngs.length - 1];
+  const rank = view?.attribution?.rank;
+  const endMarker = L.marker(end, {
+    icon: L.divIcon({
+      className: "vessel-div",
+      html: `<span style="--vc:${color}">${rank ? "#" + rank : "▲"}</span>`,
+      iconSize: [22, 22], iconAnchor: [11, 11],
+    }),
+  }).addTo(g);
+  if (opts.onClick) endMarker.on("click", () => opts.onClick(view));
+  else endMarker.bindPopup(vesselPopupHtml(view));
+
+  let dot = null;
+  function positionAt(tH) {
+    const p = _interpPing(pings, tH);
+    if (!p) return;
+    if (!dot) dot = L.circleMarker(p, { radius: 5, color, weight: 2, fillColor: color, fillOpacity: 0.9 }).addTo(g);
+    else dot.setLatLng(p);
+  }
+  return { group: g, endMarker, positionAt };
+}
+
+export function vesselPopupHtml(view) {
+  const a = view?.attribution || {};
+  const m = view?.metrics || {};
+  const ae = a.ais_anomaly || {};
+  const rd = a.route_deviation || {};
+  const line = (k, v) => (v == null || v === "" ? "" : `<br><span class="muted">${k}:</span> ${v}`);
+  return `<b>${view?.name || "Vessel"}</b> <span class="mono">${view?.mmsi || ""}</span>`
+    + line("type", view?.vessel_type) + line("flag", view?.flag)
+    + (a.rank ? `<br><b>candidate #${a.rank}</b> — score ${Number(a.score).toFixed(1)} (${a.assessment || ""})` : "")
+    + line("seen", `T${m.first_seen_h} … T${m.last_seen_h} h · ${m.n_points} pings`)
+    + line("speed", `${m.sog_min_kn}–${m.sog_max_kn} kn (mean ${m.sog_mean_kn})`)
+    + line("heading", m.mean_heading_deg != null ? `${m.mean_heading_deg}°` : null)
+    + line("AIS gaps", `${m.n_gaps}${m.longest_blackout_over_window_min ? ` · ${Math.round(m.longest_blackout_over_window_min)} min over window` : ""}`)
+    + line("AE anomaly", ae.peak_reconstruction_error != null
+        ? `peak err ${ae.peak_reconstruction_error} / thr ${ae.threshold} — ${ae.flagged_pings ? ae.flagged_pings + " flagged" : "nothing flagged"}` : null)
+    + line("LSTM route dev.", rd.usable ? `${rd.max_deviation_km} km peak` : (rd.finding ? "not usable (AOI-gated)" : null));
+}
+
 export function heat(map, cells, bbox) {
   // cells: flat list of probabilities over a grid inside bbox [w,s,e,n]
   if (!cells || !cells.length || !bbox) return [];

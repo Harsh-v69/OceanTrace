@@ -1,7 +1,7 @@
 """
 Lagrangian oil-drift engine  (Stage B core).
 
-Ported from SAMUDRA NETRA ``ml/drift/particles.py``.
+Ported from OceanTrace ``ml/drift/particles.py``.
 
 Physics
 -------

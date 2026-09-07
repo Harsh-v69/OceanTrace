@@ -1,7 +1,7 @@
 """
 Drift / hindcast / forecast physical constants - the single configuration layer.
 
-Ported from SAMUDRA NETRA ``config.DRIFT`` (drift physics = selected [SN] in
+Ported from OceanTrace ``config.DRIFT`` (drift physics = selected [SN] in
 docs/MERGE_ARCHITECTURE.md). Every drift module imports its numbers from here;
 nothing downstream hard-codes a coefficient. Each value keeps its citation.
 """

@@ -1,7 +1,7 @@
 """
 Oil / look-alike classifier  (STEP 3, part 3).
 
-Ported from SAMUDRA NETRA ``ml/sar/classifier.py`` - the merge-selected SAR
+Ported from OceanTrace ``ml/sar/classifier.py`` - the merge-selected SAR
 detector (docs/MERGE_ARCHITECTURE.md).
 
 A soft-voting ensemble of a Random Forest (non-linear feature interactions,

@@ -1,7 +1,7 @@
 """
 Spatial-temporal consistency  (attribution criterion 1).
 
-Ported from SAMUDRA NETRA ``ml/ais/scoring.py::spatiotemporal_score``.
+Ported from OceanTrace ``ml/ais/scoring.py::spatiotemporal_score``.
 
 The question: *during the reconstructed release window, was this vessel where
 the oil is reconstructed to have come from?* A Gaussian kernel turns the

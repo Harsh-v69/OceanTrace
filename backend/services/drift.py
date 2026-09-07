@@ -2,7 +2,7 @@
 Drift service - met-ocean providers + hindcast / forecast orchestration.
 
 The ML physics lives in ``backend.ml.drift`` (RK4 particle engine, ported from
-SAMUDRA NETRA). This module adds:
+OceanTrace). This module adds:
 
 * the ``MetOceanProvider`` interface and three implementations - Real / Demo /
   Cached - with a clean fallback to the demo (simulated) field whenever real

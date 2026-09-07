@@ -1,7 +1,7 @@
 """
 AIS ingestion, cleaning and track reconstruction  (attribution, step 1).
 
-Ported from SAMUDRA NETRA ``ml/ais/tracks.py`` and rewritten pandas-free
+Ported from OceanTrace ``ml/ais/tracks.py`` and rewritten pandas-free
 (pure numpy + stdlib) - pandas arrives with the POSEatSea / torch phase.
 
 Raw AIS is messy in ways that matter for attribution: irregular cadence,

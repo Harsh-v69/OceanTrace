@@ -1,6 +1,6 @@
 # DEPLOYMENT & DEMO — SIH26143 Unified Prototype
 
-SAMUDRA NETRA × POSEatSea — one FastAPI application. No separate Streamlit
+OceanTrace — one FastAPI application. No separate Streamlit
 process. The Operations Console is served as static files by the same app.
 
 ---

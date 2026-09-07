@@ -1,7 +1,7 @@
 """
 Baseline vessel-attribution engine (Stage C core).
 
-Ported from SAMUDRA NETRA ``ml/ais/scoring.py`` (attribution = selected [SN] in
+Ported from OceanTrace ``ml/ais/scoring.py`` (attribution = selected [SN] in
 docs/MERGE_ARCHITECTURE.md), plus POSEatSea's ``dwell`` term. Pure numpy,
 CPU-only, deterministic.
 

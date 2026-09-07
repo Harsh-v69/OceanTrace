@@ -80,6 +80,13 @@ export const api = {
   me: () => request("/auth/me"),
   logout() { setToken(null); setStoredUser(null); },
 
+  // ---- user management (REGIONAL / NATIONAL) ----
+  users: () => request("/users"),
+  userScope: () => request("/users/me/scope"),
+  createUser: (payload) => request("/users", { method: "POST", body: payload }),
+  updateUser: (id, payload) => request(`/users/${id}`, { method: "PATCH", body: payload }),
+  setUserActive: (id, on) => request(`/users/${id}/${on ? "enable" : "disable"}`, { method: "POST" }),
+
   // ---- system ----
   health: () => request("/system/health", { auth: false }),
   info: () => request("/system/info", { auth: false }),

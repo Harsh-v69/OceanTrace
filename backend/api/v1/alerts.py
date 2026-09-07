@@ -31,7 +31,10 @@ def list_alerts(
     offset: int = 0,
 ) -> list[Alert]:
     rows = list(db.execute(select(Alert).order_by(Alert.id.desc())).scalars().all())
-    scoped = filter_by_jurisdiction(db, user, rows, lat_attr="lat", lon_attr="lon")
+    scoped = filter_by_jurisdiction(
+        db, user, rows, lat_attr="lat", lon_attr="lon",
+        code_attr="jurisdiction_codes",
+    )
     return scoped[offset: offset + min(limit, 200)]
 
 

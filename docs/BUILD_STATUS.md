@@ -1,10 +1,14 @@
 # BUILD STATUS — SIH26143 Unified Prototype
 
-**Project:** SAMUDRA NETRA × POSEatSea — one FastAPI application for satellite
+**Project:** OceanTrace — one FastAPI application for satellite
 oil-spill detection + AIS vessel attribution.
 **Problem statement:** SIH26143 (NTRO).
-**Status date:** 2026-09-06
+**Status date:** 2026-09-07
 **Host:** Windows 11, Python 3.13.7, CPU only (no GPU), fully offline.
+
+> Phases 1–9 delivered the prototype. A follow-on issues backlog is being worked
+> as **Epics** (see §7). Epic 1 (RBAC, hierarchical user management, vessel
+> tracking, OceanTrace rebrand) is **complete**.
 
 ---
 
@@ -191,10 +195,37 @@ acceptable budget for this prototype. No GPU is required anywhere.
 
 ---
 
-## 7. Sign-off
+## 7. Post-prototype Epics
 
-All nine phases **PASSED**. 197/197 automated tests green. 24/24 acceptance
-checkpoints green. Lazy-loading verified. Performance within tiered budgets on a
-single CPU core with no GPU and no network. The system is ready for the demo.
+### Epic 1 — RBAC, hierarchical user management, vessel tracking, rebrand — **COMPLETE** (2026-09-07)
+
+| Item | What shipped |
+|---|---|
+| **Rebrand → OceanTrace** | Project-wide replace of "SAMUDRA NETRA" across `backend/` (config `APP_NAME`, ML docstrings, static console HTML/JS/CSS), `run.py`, `scripts/`, `docs/BUILD_STATUS.md`, `docs/DEPLOYMENT.md`, SMS template. `CLAUDE.md` and `docs/MERGE_ARCHITECTURE.md` left intact (they name the two upstream repos being merged). |
+| **RBAC hardening** | The engine was already sound (39 Phase-7 tests). Added: alert visibility scoped by `jurisdiction_codes` even with null lat/lon (`user_can_access_any_code`, `filter_by_jurisdiction(code_attr=…)`); `test_rbac_hardening.py` (6 tests) — single-resource 403, REGIONAL closure boundary, empty-assignment → 403, code-scoped alerts, min-role ladder. |
+| **Hierarchical user management** | `ALLOW_OPEN_REGISTRATION=False` by default → `POST /auth/register` returns 403. New `api/v1/users.py`: `GET/POST /users`, `GET/PATCH /users/{id}`, `/users/{id}/disable|enable`, `/users/me/scope`. NATIONAL manages any account; REGIONAL manages PILOTs whose zones ⊆ its closure; PILOT no access. Last-active-NATIONAL and self-management guards. `seed_default_users()` (idempotent) — `national@ / regional@ / pilot@oceantrace.gov.in`, password `DEFAULT_USER_PASSWORD`. Console: **User Management** view (REGIONAL+), Register tab hidden unless `open_registration`. `test_user_management.py` (12 tests). |
+| **Vessel tracking** | Orchestrator now persists a `Vessel` row per candidate, links each to its FUSION `Anomaly` (so `/vessels` is jurisdiction-scoped), and stashes a map-ready `summary_metrics.vessel_tracks[mmsi]` — decimated pings, loiter spans, AIS-blackout gaps, per-track metrics, and the fused AE / route-deviation result. New `services/vessels.py` helpers (`persist_vessels`, `track_view`, `build_track_views`); `GET /vessels/{mmsi}?investigation_id=`, `GET /vessels/{mmsi}/track`. Console: Mission Control draws the prime suspect's track; Workstation draws every candidate track (prime red, loiter = amber ring, blackout = dashed red), a click populates a detail panel, and the T-48h…+48h slider walks each vessel to its interpolated position. `test_vessel_tracking.py` (6 tests). |
+| **Console cache** | `/app` now served with `Cache-Control: no-cache, must-revalidate` + versioned module imports so an updated build is never masked by a stale browser copy. |
+
+```
+$ python -m pytest -q          →  221 passed
+$ python scripts/acceptance.py  →  26/26 checkpoints passed
+```
+
+Acceptance grew from 24 → 26 (open-registration-closed + hierarchical creation;
+vessel-tracking engine; REGIONAL-scoped management). `test_acceptance.py` updated.
+
+**Epics 2–4** (drift accuracy + land collision + offline basemap; real met-ocean
++ Twilio + upload endpoints; PostGIS + Alembic + weathering) are queued; several
+have external dependencies (coastline dataset, Copernicus CDS key, Twilio
+account, a PostGIS instance) that must be supplied.
+
+---
+
+## 8. Sign-off
+
+Phases 1–9 **PASSED** and Epic 1 **COMPLETE**. **221/221** automated tests green.
+**26/26** acceptance checkpoints green. Lazy-loading verified. Performance within
+tiered budgets on a single CPU core with no GPU and no network.
 
 See `docs/DEPLOYMENT.md` for run and demo instructions.

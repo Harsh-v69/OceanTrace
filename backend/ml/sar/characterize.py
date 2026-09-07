@@ -9,7 +9,7 @@ Turns a detected dark spot into a geographic + geometric description:
   * orientation of the principal axis (degrees, 0 = North, undirected 0-180)
   * a simplified GeoJSON polygon in WGS-84
 
-Trimmed from SAMUDRA NETRA ``ml/sar/characterize.py``: the weathering / age /
+Trimmed from OceanTrace ``ml/sar/characterize.py``: the weathering / age /
 volume estimates depend on the drift model and arrive in Phase 4.
 """
 from __future__ import annotations

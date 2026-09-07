@@ -1,7 +1,7 @@
 """
 Geodesy + raster<->geographic mapping for a north-up SAR scene.
 
-Ported subset of SAMUDRA NETRA ``backend/core/geo.py`` - only what the SAR
+Ported subset of OceanTrace ``backend/core/geo.py`` - only what the SAR
 detector needs (the drift model's frame helpers arrive with Phase 4).
 
 All bounding boxes are ``[west, south, east, north]`` in degrees.

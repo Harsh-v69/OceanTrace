@@ -12,11 +12,13 @@ from backend.api.v1 import (
     jurisdictions,
     scenarios,
     system,
+    users,
     vessels,
 )
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
+api_router.include_router(users.router)
 api_router.include_router(system.router)
 api_router.include_router(jurisdictions.router)
 api_router.include_router(investigations.router)

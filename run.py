@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Single entry point for the unified SAMUDRA NETRA x POSEatSea prototype.
+Single entry point for the unified OceanTrace prototype.
 
     python run.py                 # start the API + Operations Console
     python run.py --check         # offline pre-flight, no server

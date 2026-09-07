@@ -47,7 +47,7 @@ def require_row_access(
 def filter_by_jurisdiction(
     db: Session, user: User, rows: Iterable, *,
     lat_attr: str | None = None, lon_attr: str | None = None,
-    jur_attr: str | None = None,
+    jur_attr: str | None = None, code_attr: str | None = None,
 ) -> list:
     """Drop rows the user's jurisdiction closure does not cover. NATIONAL keeps all."""
     if juris.accessible_jurisdiction_ids(db, user) is None:
@@ -57,8 +57,9 @@ def filter_by_jurisdiction(
         lat = getattr(r, lat_attr, None) if lat_attr else None
         lon = getattr(r, lon_attr, None) if lon_attr else None
         jid = getattr(r, jur_attr, None) if jur_attr else None
+        codes = getattr(r, code_attr, None) if code_attr else None
         if juris.user_can_access_coords_or_jurisdiction(
-            db, user, lat=lat, lon=lon, jurisdiction_id=jid
+            db, user, lat=lat, lon=lon, jurisdiction_id=jid, jurisdiction_codes=codes
         ):
             kept.append(r)
     return kept

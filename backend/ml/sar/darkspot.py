@@ -1,7 +1,7 @@
 """
 Dark-spot segmentation  (STEP 3, part 1).
 
-Ported from SAMUDRA NETRA ``ml/sar/darkspot.py``.
+Ported from OceanTrace ``ml/sar/darkspot.py``.
 
 Oil suppresses Bragg scattering, so a slick is a DARK anomaly against the
 wind-roughened sea. Finding it is a *local-contrast* problem, not a global

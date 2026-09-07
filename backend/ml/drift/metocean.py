@@ -1,7 +1,7 @@
 """
 Met-ocean environment fields (Stage B input).
 
-Ported from SAMUDRA NETRA ``ml/drift/metocean.py`` and refactored so the same
+Ported from OceanTrace ``ml/drift/metocean.py`` and refactored so the same
 bilinear space-time interpolation serves three cases:
 
 * ``SyntheticMetOcean`` - a deterministic field with the statistics and

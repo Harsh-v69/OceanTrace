@@ -1,7 +1,7 @@
 """
 Attribution scoring constants - the single configuration layer.
 
-Ported / adapted from SAMUDRA NETRA ``config.ATTRIB`` (attribution engine =
+Ported / adapted from OceanTrace ``config.ATTRIB`` (attribution engine =
 selected [SN] in docs/MERGE_ARCHITECTURE.md). Phase 5 ships the *baseline*
 physical / spatiotemporal criteria; the behavioural criteria (AIS blackout,
 speed anomaly, route deviation) fold in with the POSEatSea autoencoder + LSTM

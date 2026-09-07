@@ -247,13 +247,26 @@ def user_can_access_jurisdiction(db: Session, user: User, jurisdiction_id: int |
     return int(jurisdiction_id) in allowed
 
 
+def user_can_access_any_code(db: Session, user: User, codes) -> bool:
+    """True if any jurisdiction *code* in ``codes`` is inside the user's closure."""
+    allowed = accessible_jurisdiction_ids(db, user)
+    if allowed is None:
+        return True
+    if not codes:
+        return False
+    return any(int(i) in allowed for i in resolve_codes_to_ids(db, codes))
+
+
 def user_can_access_coords_or_jurisdiction(
-    db: Session, user: User, *, lat: float | None, lon: float | None, jurisdiction_id: int | None
+    db: Session, user: User, *, lat: float | None, lon: float | None,
+    jurisdiction_id: int | None, jurisdiction_codes=None,
 ) -> bool:
-    """A row is visible if EITHER its jurisdiction id OR its coordinates are in scope."""
+    """A row is visible if its jurisdiction id, its codes, OR its coordinates are in scope."""
     if accessible_jurisdiction_ids(db, user) is None:
         return True
     if jurisdiction_id is not None and user_can_access_jurisdiction(db, user, jurisdiction_id):
+        return True
+    if jurisdiction_codes and user_can_access_any_code(db, user, jurisdiction_codes):
         return True
     if lat is not None and lon is not None and user_can_access_point(db, user, lat, lon):
         return True

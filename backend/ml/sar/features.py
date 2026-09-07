@@ -1,7 +1,7 @@
 """
 Candidate feature extraction  (STEP 3, part 2).
 
-Ported verbatim from SAMUDRA NETRA ``ml/sar/features.py`` - the 30 features and
+Ported verbatim from OceanTrace ``ml/sar/features.py`` - the 30 features and
 their ORDER are fixed by the trained RF+GB ensemble and must not change.
 
 GEOMETRY   - oil from a moving vessel is long, narrow, irregular; a low-wind
