@@ -1,6 +1,7 @@
 """
-Four deterministic demo scenarios.
+Deterministic demo scenarios.
 
+West Coast / International (original four, byte-identical - use ``_leg``):
     mumbai-high-confidence  - a clear oil slick off Maharashtra with one culprit
     lookalike-darkpatch     - a low-wind / biogenic dark patch that must be rejected
     ambiguous-drift         - a weak, aged slick where drift + behaviour separate
@@ -9,11 +10,18 @@ Four deterministic demo scenarios.
                               the POSEatSea LSTM route-deviation + AIS autoencoder
                               anomaly both engage
 
+East Coast / Bay of Bengal (use ``_realistic_leg`` - per-type movement noise
+and occasional AIS gaps):
+    paradip-odisha          - fresh tanker slop discharge off Paradip (IN-OD)
+    kakinada-andhra         - aged, ambiguous slick off Kakinada (IN-AP)
+    chennai-tamilnadu       - biogenic calm-water look-alike off Chennai (IN-TN)
+
 A scenario ships a synthetic SAR scene plus a ``make_tracks(origin, axis, t)``
 callback. The orchestration service runs SAR detection + the hindcast first,
 then asks the scenario to lay its AIS traffic on the *reconstructed* origin -
 so the culprit is genuinely on the reverse-drift axis, deterministically, on
-every run.
+every run. All AIS here is synthetic - realistic movement patterns, not a live
+operational feed.
 """
 from __future__ import annotations
 
@@ -71,6 +79,59 @@ def _behind(point, bearing_deg, speed_kn, hours):
 
 
 # --------------------------------------------------------------------------- #
+# Realistic AIS leg builder (used ONLY by the East-Coast scenarios below;
+# the four original scenarios keep using _leg() and stay byte-identical).
+#
+# Profiles shape the course / speed noise so tracks read like real traffic:
+#   tanker/bulk/cargo -> hold a steady heading, small speed jitter
+#   fishing           -> wander, frequent turns, oscillating slow speed
+#   patrol            -> moderate manoeuvring
+# Everything is seeded, so a given scenario is identical on every run.
+# --------------------------------------------------------------------------- #
+_PROFILES = {
+    "tanker":  dict(cadence_s=180.0, cog_jitter=1.2, sog_jitter=0.35, walk=0.15),
+    "bulk":    dict(cadence_s=165.0, cog_jitter=1.5, sog_jitter=0.40, walk=0.20),
+    "cargo":   dict(cadence_s=150.0, cog_jitter=1.9, sog_jitter=0.55, walk=0.28),
+    "fishing": dict(cadence_s=90.0,  cog_jitter=22.0, sog_jitter=2.4, walk=9.0),
+    "patrol":  dict(cadence_s=120.0, cog_jitter=7.0,  sog_jitter=1.2, walk=3.0),
+}
+
+
+def _realistic_leg(mmsi, name, vtype, start, bearing_deg, speed_kn, t0_h, t1_h,
+                   obs_time, *, profile="cargo", gaps=(), seed=None):
+    p = _PROFILES.get(profile, _PROFILES["cargo"])
+    rng = np.random.default_rng(int(seed if seed is not None else mmsi))
+    cadence = p["cadence_s"]
+    n = max(int((t1_h - t0_h) * 3600.0 / cadence) + 1, 2)
+    ts_h = np.linspace(t0_h, t1_h, n)
+    lat, lon = float(start[0]), float(start[1])
+    course = float(bearing_deg % 360.0)
+    recs = []
+    for i, th in enumerate(ts_h):
+        nxt = (ts_h[min(i + 1, n - 1)] - th) * 3600.0
+        in_gap = any(g0 <= th <= g1 for (g0, g1) in gaps)
+        # heading random-walk (fishing wanders hard; tankers barely move)
+        course = (course + float(rng.normal(0.0, p["walk"]))) % 360.0
+        sog = max(0.2, speed_kn + float(rng.normal(0.0, p["sog_jitter"])))
+        if not in_gap:
+            cog = (course + float(rng.normal(0.0, p["cog_jitter"]))) % 360.0
+            rot = (float(np.clip(rng.normal(0.0, p["cog_jitter"] * 2.0), -120.0, 120.0))
+                   if profile == "fishing" else 0.0)
+            recs.append({
+                "mmsi": mmsi, "name": name, "vessel_type": vtype,
+                "timestamp": (obs_time + timedelta(hours=float(th))).isoformat(),
+                "latitude": lat, "longitude": lon,
+                "sog": round(sog, 1), "cog": round(cog, 1),
+                "heading": round(cog, 1), "rot": round(rot, 1),
+                "nav_status": 7 if profile == "fishing" else 0,
+            })
+        # advance position even through the gap so the track resumes plausibly
+        la, lo = destination(lat, lon, course, nxt * sog * _KN)
+        lat, lon = float(la), float(lo)
+    return recs
+
+
+# --------------------------------------------------------------------------- #
 # Spec
 # --------------------------------------------------------------------------- #
 @dataclass
@@ -86,6 +147,8 @@ class ScenarioSpec:
     expected: dict = field(default_factory=dict)
     #: (origin[lat,lon], axis_deg, obs_time) -> [{"records": [...]}, ...]
     make_tracks: Callable | None = None
+    #: coarse geography for the UI scenario selector
+    coast: str = "West Coast"
 
 
 # --------------------------------------------------------------------------- #
@@ -144,6 +207,45 @@ def _wakashio_tracks(origin, axis, t):
 
 
 # --------------------------------------------------------------------------- #
+# East-Coast track factories (Bay of Bengal) - realistic per-type behaviour
+# --------------------------------------------------------------------------- #
+def _paradip_tracks(origin, axis, t):
+    # Odisha: a products tanker slop-discharging along the reverse-drift axis,
+    # with a short AIS blackout; a trawler working the same grounds; a bulk
+    # carrier in the Paradip approach lane, well clear.
+    culprit = _realistic_leg(415820001, "MT UTKAL VOYAGER", 80,
+                             _behind(origin, axis, 11.5, 10.0), axis, 11.5,
+                             -20.0, -1.0, t, profile="tanker", seed=8201,
+                             gaps=[(-7.6, -6.7)])
+    fisher = _realistic_leg(415820002, "FV KALINGA PEARL", 30,
+                            destination(origin[0], origin[1], (axis + 70.0) % 360.0, 8_000.0),
+                            (axis + 40.0) % 360.0, 4.6, -14.0, -2.0, t,
+                            profile="fishing", seed=8202)
+    bulk = _realistic_leg(477820003, "MV EASTERN HARVEST", 70,
+                          destination(origin[0], origin[1], 150.0, 47_000.0),
+                          25.0, 12.6, -24.0, 0.0, t, profile="bulk", seed=8203)
+    return [{"records": culprit}, {"records": fisher}, {"records": bulk}]
+
+
+def _kakinada_tracks(origin, axis, t):
+    # Andhra Pradesh: an aged, low-contrast slick. The tanker holds the axis but
+    # drops AIS twice; a trawler crosses the origin; a cargo ship runs a parallel
+    # lane. Drift + axis alignment + the feedback loop separate them.
+    culprit = _realistic_leg(419820011, "MT GODAVARI DAWN", 80,
+                             _behind(origin, axis, 9.0, 13.0), axis, 9.0,
+                             -26.0, -1.0, t, profile="tanker", seed=8211,
+                             gaps=[(-12.2, -11.2), (-4.1, -3.6)])
+    cross = _realistic_leg(419820012, "FV BAY RANGER", 30,
+                           destination(origin[0], origin[1], (axis + 95.0) % 360.0, -10_000.0),
+                           (axis + 95.0) % 360.0, 5.4, -15.0, -4.0, t,
+                           profile="fishing", seed=8212)
+    lane = _realistic_leg(636820013, "MV COROMANDEL STAR", 70,
+                          destination(origin[0], origin[1], 40.0, 43_000.0),
+                          120.0, 12.1, -20.0, 0.0, t, profile="cargo", seed=8213)
+    return [{"records": culprit}, {"records": cross}, {"records": lane}]
+
+
+# --------------------------------------------------------------------------- #
 # Scenario builders
 # --------------------------------------------------------------------------- #
 def _mumbai_high_confidence():
@@ -155,7 +257,8 @@ def _mumbai_high_confidence():
         name="Mumbai / Maharashtra - high-confidence spill",
         summary=("A sharp-edged oil slick off the Maharashtra coast. One tanker "
                  "sits on the reconstructed reverse-drift axis; two decoys do not."),
-        region_hint="IN-MH", obs_time=_T, center=c, bbox=list(scene.meta["bbox"]),
+        region_hint="IN-MH", coast="West Coast", obs_time=_T, center=c,
+        bbox=list(scene.meta["bbox"]),
         truth_mmsi=419810001, make_tracks=_mumbai_tracks,
         expected={"classification": "Oil-like anomaly", "alert": True,
                   "prime_mmsi": 419810001, "jurisdiction": "IN-MH"},
@@ -172,7 +275,8 @@ def _lookalike_darkpatch():
         name="Goa / Karnataka - look-alike dark patch",
         summary=("A low-wind cell plus a biogenic film - no mineral oil. The "
                  "look-alike filter must reject it and raise no alert."),
-        region_hint="IN-GA-KA", obs_time=_T, center=c, bbox=list(scene.meta["bbox"]),
+        region_hint="IN-GA-KA", coast="West Coast", obs_time=_T, center=c,
+        bbox=list(scene.meta["bbox"]),
         truth_mmsi=None, make_tracks=None,
         expected={"classification_not": "Oil-like anomaly", "alert": False},
     )
@@ -189,7 +293,8 @@ def _ambiguous_drift():
         summary=("An aged, low-contrast slick. Proximity alone does not separate "
                  "the tanker from a fishing boat that crossed the origin - drift, "
                  "axis alignment and the release-time feedback loop do."),
-        region_hint="IN-MH", obs_time=_T, center=c, bbox=list(scene.meta["bbox"]),
+        region_hint="IN-MH", coast="West Coast", obs_time=_T, center=c,
+        bbox=list(scene.meta["bbox"]),
         truth_mmsi=419810011, make_tracks=_ambiguous_tracks,
         expected={"classification": "Oil-like anomaly", "prime_mmsi": 419810011,
                   "alert": True},
@@ -207,10 +312,65 @@ def _wakashio_mauritius():
         summary=("The MV Wakashio grounding near Pointe d'Esny. Inside the "
                  "Mauritius AOI the POSEatSea LSTM route-deviation and AIS "
                  "autoencoder anomaly both engage on the deceleration."),
-        region_hint="MU-AOI", obs_time=_T, center=c, bbox=list(scene.meta["bbox"]),
+        region_hint="MU-AOI", coast="International", obs_time=_T, center=c,
+        bbox=list(scene.meta["bbox"]),
         truth_mmsi=419990001, make_tracks=_wakashio_tracks,
         expected={"classification": "Oil-like anomaly", "prime_mmsi": 419990001,
                   "alert": True, "ai_components_engaged": True, "jurisdiction": "MU-AOI"},
+    )
+    return spec, scene
+
+
+def _paradip_odisha():
+    c = (20.10, 86.95)
+    scene = synth_scene(center_lat=c[0], center_lon=c[1], seed=820001, wind_ms=7.0,
+                        with_oil=True, with_lowwind=True, with_biogenic=True)
+    spec = ScenarioSpec(
+        key="paradip-odisha",
+        name="Paradip, Odisha - tanker slop discharge",
+        summary=("A fresh slick in the Bay of Bengal off Paradip. A products "
+                 "tanker runs the reverse-drift axis with a short AIS gap; a "
+                 "trawler and a lane bulk carrier are the decoys."),
+        region_hint="IN-OD", coast="East Coast", obs_time=_T, center=c,
+        bbox=list(scene.meta["bbox"]), truth_mmsi=415820001,
+        make_tracks=_paradip_tracks,
+        expected={"classification": "Oil-like anomaly", "alert": True,
+                  "prime_mmsi": 415820001, "jurisdiction": "IN-OD"},
+    )
+    return spec, scene
+
+
+def _kakinada_andhra():
+    c = (16.75, 82.55)
+    scene = synth_scene(center_lat=c[0], center_lon=c[1], seed=820002, wind_ms=6.2,
+                        with_oil=True, with_lowwind=True, with_biogenic=True)
+    spec = ScenarioSpec(
+        key="kakinada-andhra",
+        name="Kakinada, Andhra Pradesh - ambiguous aged slick",
+        summary=("A weathered, low-contrast slick off Kakinada. The tanker drops "
+                 "AIS twice and a trawler crosses the origin - drift, axis "
+                 "alignment and the release-time feedback loop break the tie."),
+        region_hint="IN-AP", coast="East Coast", obs_time=_T, center=c,
+        bbox=list(scene.meta["bbox"]), truth_mmsi=419820011,
+        make_tracks=_kakinada_tracks,
+        expected={"classification": "Oil-like anomaly", "prime_mmsi": 419820011,
+                  "alert": True, "jurisdiction": "IN-AP"},
+    )
+    return spec, scene
+
+
+def _chennai_tamilnadu():
+    c = (12.85, 80.55)
+    scene = synth_scene(center_lat=c[0], center_lon=c[1], seed=820003, wind_ms=3.9,
+                        with_oil=False, with_lowwind=True, with_biogenic=True)
+    spec = ScenarioSpec(
+        key="chennai-tamilnadu",
+        name="Chennai, Tamil Nadu - biogenic look-alike",
+        summary=("A calm-water sheen off Chennai with no mineral oil. The "
+                 "look-alike filter must reject it and raise no alert."),
+        region_hint="IN-TN", coast="East Coast", obs_time=_T, center=c,
+        bbox=list(scene.meta["bbox"]), truth_mmsi=None, make_tracks=None,
+        expected={"classification_not": "Oil-like anomaly", "alert": False},
     )
     return spec, scene
 
@@ -220,6 +380,9 @@ _BUILDERS = {
     "lookalike-darkpatch": _lookalike_darkpatch,
     "ambiguous-drift": _ambiguous_drift,
     "wakashio-mauritius": _wakashio_mauritius,
+    "paradip-odisha": _paradip_odisha,
+    "kakinada-andhra": _kakinada_andhra,
+    "chennai-tamilnadu": _chennai_tamilnadu,
 }
 
 SCENARIOS = tuple(_BUILDERS)
@@ -231,7 +394,8 @@ def list_scenarios() -> list[dict]:
         spec, _ = fn()
         out.append({
             "key": spec.key, "name": spec.name, "summary": spec.summary,
-            "region_hint": spec.region_hint, "center": list(spec.center),
+            "region_hint": spec.region_hint, "coast": spec.coast,
+            "center": list(spec.center),
             "has_vessels": spec.make_tracks is not None, "expected": spec.expected,
         })
     return out

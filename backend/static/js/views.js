@@ -1,11 +1,11 @@
 /* All screens for the Operations Console. Each view renders into ctx.root and
    wires its own events. ctx = { user, root, go, toast }. */
 
-import { api, fetchText } from "./api.js?v=ui8";
+import { api, fetchText } from "./api.js?v=ui9";
 import {
   makeMap, anomalyMarker, vesselMarker, trackLine, polygon, fit, L,
   vesselTrackLayer, vesselPopupHtml, shorelineContact, mapLegend,
-} from "./map.js?v=ui8";
+} from "./map.js?v=ui9";
 
 /* -------------------------------------------------------------- helpers -- */
 const h = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -91,6 +91,26 @@ function setHTML(sel, html) {
   return !!el;
 }
 
+/* -------- demo / synthetic-data notice + scenario grouping -------------- */
+const DEMO_NOTICE = "DEMO / SYNTHETIC DATA — generated with realistic maritime movement patterns; not live operational AIS.";
+function demoBanner() {
+  return `<div class="demo-banner" role="note">
+    <span class="demo-tag">SYNTHETIC DEMO</span><span>${h(DEMO_NOTICE)}</span>
+  </div>`;
+}
+const COAST_ORDER = ["West Coast", "East Coast", "International", "Islands"];
+function scenariosByCoast(list) {
+  const groups = new Map();
+  for (const s of list || []) {
+    const c = s.coast || "Other";
+    (groups.get(c) || groups.set(c, []).get(c)).push(s);
+  }
+  const ordered = [];
+  for (const c of COAST_ORDER) if (groups.has(c)) ordered.push([c, groups.get(c)]);
+  for (const [c, v] of groups) if (!COAST_ORDER.includes(c)) ordered.push([c, v]);
+  return ordered;
+}
+
 /* the 8 unified-fusion components, in display order, with UI labels.
    Keys match backend summary_metrics.attribution.candidates[].components. */
 const COMPONENTS = [
@@ -167,14 +187,17 @@ async function missionControl(ctx) {
   ctx.root.innerHTML = page(
     "Mission Control",
     "Live picture of the Indian coastline: active oil-like anomalies, their confidence, and the vessels under attribution.",
-    `<div class="kpis" id="mc-kpis"></div>
+    `${demoBanner()}
+     <div class="kpis" id="mc-kpis"></div>
      <p class="statline" id="mc-statline"></p>
      <div class="panel"><h2>Coastal picture <span class="h2-note" id="mc-map-note"></span></h2>
        <div id="mc-map" class="map"></div></div>
      <div class="grid cols-2">
-       <div class="panel"><h2>Run a demo scenario</h2>
-         <p class="muted">Each runs the full pipeline: SAR detection &rarr; look-alike filter &rarr; drift hindcast &rarr; AIS fusion &rarr; jurisdiction &rarr; SMS alert.</p>
-         <div id="mc-scenarios" class="row"></div><p id="mc-run-msg" class="muted"></p></div>
+       <div class="panel"><h2>Run a demo scenario <span class="demo-tag sm">SYNTHETIC</span></h2>
+         <p class="muted">Full pipeline: SAR detection &rarr; look-alike filter &rarr; drift hindcast &rarr; AIS fusion &rarr; jurisdiction &rarr; SMS alert.</p>
+         <div class="row" style="margin-bottom:.5rem"><label class="coast-select">Coast&nbsp;
+           <select id="mc-coast"></select></label></div>
+         <div id="mc-scenarios" class="scenario-grid"></div><p id="mc-run-msg" class="muted"></p></div>
        <div class="panel"><h2>Analyse an uploaded scene</h2>
          <form id="mc-upload" class="row" style="align-items:flex-end;gap:.6rem;flex-wrap:wrap">
            <label>Sentinel-1 GeoTIFF / PNG<input type="file" name="scene" accept=".tif,.tiff,.png,.jpg" required></label>
@@ -254,20 +277,32 @@ async function missionControl(ctx) {
     `<b class="tone-warn">${lookalikes.length}</b> look-alike(s) filtered &middot; ` +
     `<b class="tone-info">${primeCount}</b> with a prime suspect`;
 
-  $("#mc-scenarios").innerHTML = scen.scenarios.map((s) =>
-    `<button class="btn" data-key="${h(s.key)}">${h(s.name)}</button>`).join("") || `<span class="muted">none</span>`;
-  $$("#mc-scenarios .btn").forEach((b) => b.addEventListener("click", async () => {
-    $$("#mc-scenarios .btn").forEach((x) => (x.disabled = true));
-    $("#mc-run-msg").textContent = `Running "${b.dataset.key}" through the full pipeline...`;
-    try {
-      const r = await api.runScenario(b.dataset.key);
-      ctx.toast(`${r.reference}: ${r.verdict || r.classification}`);
-      ctx.go(`#/workstation/${r.investigation_id}`);
-    } catch (e) {
-      $("#mc-run-msg").textContent = `${e.status === 403 ? "Outside your jurisdiction. " : ""}${e.message}`;
-      $$("#mc-scenarios .btn").forEach((x) => (x.disabled = false));
-    }
-  }));
+  const coastGroups = scenariosByCoast(scen.scenarios);
+  $("#mc-coast").innerHTML = ["All", ...coastGroups.map(([c]) => c)]
+    .map((c) => `<option>${h(c)}</option>`).join("");
+  function renderScenarioButtons() {
+    const pick = $("#mc-coast").value;
+    const groups = coastGroups.filter(([c]) => pick === "All" || c === pick);
+    $("#mc-scenarios").innerHTML = groups.map(([c, list]) => `
+      <div class="scen-group"><div class="scen-group-label">${h(c)}</div>
+        ${list.map((s) => `<button class="btn scen-btn" data-key="${h(s.key)}" title="${h(s.summary || "")}">
+          ${h(s.name)}${s.has_vessels === false ? ` <span class="muted">· no AIS</span>` : ""}</button>`).join("")}
+      </div>`).join("") || `<span class="muted">No scenarios for this coast.</span>`;
+    $$("#mc-scenarios .scen-btn").forEach((b) => b.addEventListener("click", async () => {
+      $$("#mc-scenarios .scen-btn").forEach((x) => (x.disabled = true));
+      $("#mc-run-msg").textContent = `Running "${b.dataset.key}" through the full pipeline…`;
+      try {
+        const r = await api.runScenario(b.dataset.key);
+        ctx.toast(`${r.reference}: ${r.verdict || r.classification}`);
+        ctx.go(`#/workstation/${r.investigation_id}`);
+      } catch (e) {
+        $("#mc-run-msg").textContent = `${e.status === 403 ? "Outside your jurisdiction. " : ""}${e.message}`;
+        $$("#mc-scenarios .scen-btn").forEach((x) => (x.disabled = false));
+      }
+    }));
+  }
+  $("#mc-coast").addEventListener("change", renderScenarioButtons);
+  renderScenarioButtons();
 
   $("#mc-upload").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -314,9 +349,11 @@ async function monitoring(ctx) {
   ctx.root.innerHTML = page(
     "Live Monitoring Stream",
     "Replay an incoming satellite observation and watch the unified pipeline execute stage by stage.",
-    `<div class="panel"><div class="row">
+    `${demoBanner()}
+     <div class="panel"><div class="row">
        <label>Observation feed
-         <select id="mon-key">${scen.scenarios.map((s) => `<option value="${h(s.key)}">${h(s.name)}</option>`).join("")}</select>
+         <select id="mon-key">${scenariosByCoast(scen.scenarios).map(([c, list]) =>
+           `<optgroup label="${h(c)}">${list.map((s) => `<option value="${h(s.key)}">${h(s.name)}</option>`).join("")}</optgroup>`).join("")}</select>
        </label>
        <button class="btn btn-primary" id="mon-run">Replay observation</button>
        <span class="spacer"></span><span id="mon-status" class="muted"></span>

@@ -281,6 +281,34 @@ code {
 .h2-note { font-weight: 400; font-size: .8rem; color: var(--muted); }
 .col-span-2 { grid-column: 1 / -1; }
 
+/* ---- synthetic-data notice + scenario selector -------------------- */
+.demo-banner {
+  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+  margin-bottom: 1rem; padding: .55rem .8rem;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+  border-left: 4px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, var(--panel));
+  border-radius: var(--r); font-size: .82rem; color: var(--text);
+}
+.demo-tag {
+  flex: none; font-size: .64rem; font-weight: 800; letter-spacing: .06em;
+  text-transform: uppercase; padding: .16rem .5rem; border-radius: 999px;
+  background: var(--warn); color: #1a1205;
+}
+.demo-tag.sm { font-size: .58rem; padding: .12rem .42rem; }
+.coast-select select {
+  font: inherit; padding: .35rem .5rem; border-radius: var(--r-sm);
+  border: 1px solid var(--line-2); background: var(--panel-2); color: var(--text);
+}
+.scenario-grid { display: flex; flex-direction: column; gap: .7rem; }
+.scen-group-label {
+  font-size: .66rem; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--faint); margin-bottom: .3rem;
+}
+.scen-group { display: flex; flex-direction: column; }
+.scen-group .scen-btn { margin: 0 0 .3rem; text-align: left; }
+.scen-btn { display: inline-block; }
+
 /* ---- badges ------------------------------------------------ */
 .badge {
   display: inline-block; padding: .12rem .5rem; border-radius: 999px;
