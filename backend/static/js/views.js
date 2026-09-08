@@ -1,11 +1,11 @@
 /* All screens for the Operations Console. Each view renders into ctx.root and
    wires its own events. ctx = { user, root, go, toast }. */
 
-import { api, fetchText } from "./api.js?v=ui2";
+import { api, fetchText } from "./api.js?v=ui5";
 import {
   makeMap, anomalyMarker, vesselMarker, trackLine, polygon, fit, L,
-  vesselTrackLayer, vesselPopupHtml, shorelineContact,
-} from "./map.js?v=ui2";
+  vesselTrackLayer, vesselPopupHtml, shorelineContact, mapLegend,
+} from "./map.js?v=ui5";
 
 /* -------------------------------------------------------------- helpers -- */
 const h = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -13,6 +13,16 @@ const h = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
 const pct = (v) => (v == null ? "-" : `${(v * 100).toFixed(0)}%`);
 const num = (v, d = 2) => (v == null || Number.isNaN(v) ? "-" : Number(v).toFixed(d));
 const when = (s) => (s ? new Date(s).toLocaleString() : "-");
+/* accept a bbox as [w,s,e,n] or {west,south,east,north} (or min_lon/… variants) */
+function bboxStr(b) {
+  if (Array.isArray(b) && b.length) return b.map((v) => num(v, 2)).join(", ");
+  if (b && typeof b === "object") {
+    const w = b.west ?? b.min_lon ?? b.w, s = b.south ?? b.min_lat ?? b.s;
+    const e = b.east ?? b.max_lon ?? b.e, n = b.north ?? b.max_lat ?? b.n;
+    if ([w, s, e, n].every((v) => v != null)) return [w, s, e, n].map((v) => num(v, 2)).join(", ");
+  }
+  return "-";
+}
 const $ = (sel, r = document) => r.querySelector(sel);
 const $$ = (sel, r = document) => [...r.querySelectorAll(sel)];
 
@@ -32,7 +42,9 @@ function alertBadge(s) {
 function page(title, sub, bodyHtml) {
   return `<div class="page-head"><div><h1>${h(title)}</h1>${sub ? `<p>${h(sub)}</p>` : ""}</div></div>${bodyHtml}`;
 }
-function kpi(v, l) { return `<div class="kpi"><div class="v">${v}</div><div class="l">${h(l)}</div></div>`; }
+function kpi(v, l, tone) {
+  return `<div class="kpi${tone ? " t-" + tone : ""}"><div class="v">${v}</div><div class="l">${h(l)}</div></div>`;
+}
 function kv(pairs) {
   return `<dl class="kv">${pairs.map(([k, v]) => `<dt>${h(k)}</dt><dd>${v}</dd>`).join("")}</dl>`;
 }
@@ -78,7 +90,9 @@ async function missionControl(ctx) {
     "Mission Control",
     "Live picture of the Indian coastline: active oil-like anomalies, their confidence, and the vessels under attribution.",
     `<div class="kpis" id="mc-kpis"></div>
-     <div class="panel"><h2>Coastal picture</h2><div id="mc-map" class="map"></div></div>
+     <p class="statline" id="mc-statline"></p>
+     <div class="panel"><h2>Coastal picture <span class="h2-note" id="mc-map-note"></span></h2>
+       <div id="mc-map" class="map"></div></div>
      <div class="grid cols-2">
        <div class="panel"><h2>Run a demo scenario</h2>
          <p class="muted">Each runs the full pipeline: SAR detection &rarr; look-alike filter &rarr; drift hindcast &rarr; AIS fusion &rarr; jurisdiction &rarr; SMS alert.</p>
@@ -92,7 +106,7 @@ async function missionControl(ctx) {
            <span id="mc-upload-msg" class="muted"></span>
          </form>
        </div>
-       <div class="panel"><h2>Recent investigations</h2><div id="mc-recent"></div></div>
+       <div class="panel col-span-2"><h2>Recent investigations</h2><div id="mc-recent"></div></div>
      </div>`
   );
 
@@ -100,17 +114,20 @@ async function missionControl(ctx) {
   const [invs, scen] = await Promise.all([loadInvestigations(), api.scenarios().catch(() => ({ scenarios: [] }))]);
 
   const markers = [];
-  let confSum = 0, confN = 0, alertN = 0, vesselN = 0;
+  let mapped = 0, hasPrimeTrack = false;
   for (const inv of invs) {
     if (inv.centroid_lat == null) continue;
+    mapped += 1;
     const sm = inv.summary_metrics || {};
     const c = sm.sar?.confidence;
+    const cls = sm.sar?.scene_classification || "";
     const m = anomalyMarker(map, inv.centroid_lat, inv.centroid_lon, {
-      confidence: c ?? 0, label: sm.sar?.scene_classification || "Anomaly", ref: inv.reference,
+      confidence: c ?? 0, label: cls || "Anomaly", ref: inv.reference, classification: cls,
     });
     m.on("click", () => ctx.go(`#/workstation/${inv.id}`));
+    m.on("mouseover", () => m.setSelected && m.setSelected(true));
+    m.on("mouseout", () => m.setSelected && m.setSelected(false));
     markers.push(m);
-    if (c != null) { confSum += c; confN += 1; }
     // draw the prime suspect's reconstructed track for this investigation
     const vts = sm.vessel_tracks || {};
     const prime = Object.values(vts).find((v) => v?.attribution?.is_prime);
@@ -119,22 +136,45 @@ async function missionControl(ctx) {
         prime: true,
         onClick: () => ctx.go(`#/workstation/${inv.id}`),
       });
-      markers.push(group); vesselN += 1;
+      markers.push(group); hasPrimeTrack = true;
     }
   }
   if (markers.length) fit(map, markers);
+  mapLegend(map, ["anom-hi", "anom-mid", "anom-la", ...(hasPrimeTrack ? ["track-prime"] : [])]);
+  $("#mc-map-note").textContent = mapped ? `${mapped} plotted` : "no located cases yet";
 
+  let alertN = null;
   try {
     const al = await api.alerts();
     alertN = al.filter((a) => ["SENT", "MOCKED"].includes(a.status)).length;
   } catch { /* PILOT can't read alerts */ }
 
+  // "what is happening right now" — derived only from real summary_metrics
+  const clsOf = (i) => i.summary_metrics?.sar?.scene_classification;
+  const confOf = (i) => i.summary_metrics?.sar?.confidence ?? 0;
+  const hasPrime = (i) => {
+    const vts = i.summary_metrics?.vessel_tracks || {};
+    return Object.values(vts).some((v) => v?.attribution?.is_prime)
+      || !!i.summary_metrics?.attribution?.summary?.prime_suspect;
+  };
+  const oilLike = invs.filter((i) => clsOf(i) === "Oil-like anomaly");
+  const activeAnoms = oilLike.filter((i) => i.status === "OPEN" || i.status === "IN_PROGRESS");
+  const highConf = invs.filter((i) => confOf(i) >= 0.75);
+  const lookalikes = invs.filter((i) => clsOf(i) === "Likely look-alike");
+  const primeCount = invs.filter(hasPrime).length;
+
   $("#mc-kpis").innerHTML =
-    kpi(invs.length, "Investigations") +
-    kpi(invs.filter((i) => i.status === "IN_PROGRESS").length, "In progress") +
-    kpi(confN ? pct(confSum / confN) : "-", "Avg confidence") +
-    kpi(vesselN || "-", "Tracked suspects") +
-    kpi(alertN || "-", "Alerts delivered");
+    kpi(activeAnoms.length, "Active anomalies", "crit") +
+    kpi(highConf.length, "High confidence", "hot") +
+    kpi(primeCount || "-", "Prime suspects", "info") +
+    kpi(lookalikes.length || "-", "Look-alikes filtered", "warn") +
+    kpi(alertN == null ? "-" : alertN, "Alerts delivered", "ok");
+
+  $("#mc-statline").innerHTML =
+    `<b>${invs.length}</b> case(s) in your jurisdiction &middot; ` +
+    `<b class="tone-crit">${activeAnoms.length}</b> active oil-like &middot; ` +
+    `<b class="tone-warn">${lookalikes.length}</b> look-alike(s) filtered &middot; ` +
+    `<b class="tone-info">${primeCount}</b> with a prime suspect`;
 
   $("#mc-scenarios").innerHTML = scen.scenarios.map((s) =>
     `<button class="btn" data-key="${h(s.key)}">${h(s.name)}</button>`).join("") || `<span class="muted">none</span>`;
@@ -214,8 +254,11 @@ async function monitoring(ctx) {
   $("#mon-run").addEventListener("click", async () => {
     const key = $("#mon-key").value;
     $("#mon-run").disabled = true;
-    $("#mon-status").textContent = "Acquiring scene...";
-    $$("#mon-pipe .pstep").forEach((p) => { p.classList.remove("done", "run"); $(".s", p).textContent = ""; });
+    $("#mon-status").textContent = "Acquiring scene…";
+    $$("#mon-pipe .pstep").forEach((p) => {
+      p.classList.remove("done", "run", "skip", "warn");
+      $(".s", p).textContent = "";
+    });
     $("#mon-result").hidden = true;
 
     let r;
@@ -232,27 +275,38 @@ async function monitoring(ctx) {
       el.classList.add("run");
       await new Promise((res) => setTimeout(res, 420));
       const info = byStep[name];
-      el.classList.remove("run"); el.classList.add("done");
-      $(".s", el).textContent = info
-        ? `${info.label} - ${num(info.seconds, 3)}s` +
-          (info.classification ? ` - ${info.classification}` : "") +
-          (info.dispatched === false ? " - no alert" : info.status ? ` - ${info.status}` : "")
-        : "skipped";
+      el.classList.remove("run");
+      if (!info) { el.classList.add("done", "skip"); $(".s", el).textContent = "skipped"; continue; }
+      el.classList.add("done");
+      if (info.dispatched === false || (info.status && /FAIL|SUPPRESS/i.test(info.status))) el.classList.add("warn");
+      $(".s", el).textContent =
+        `${info.label} · ${num(info.seconds, 3)} s` +
+        (info.classification ? ` · ${info.classification}` : "") +
+        (info.dispatched === false ? " · no alert raised" : info.status ? ` · ${info.status}` : "");
     }
-    $("#mon-status").textContent = "Complete.";
+    $("#mon-status").textContent = "Pipeline complete.";
     $("#mon-run").disabled = false;
+
+    const jname = (r.jurisdiction?.primary_name) || r.jurisdiction?.primary_code || "international waters";
+    const tone = r.classification === "Oil-like anomaly" ? "crit"
+      : r.classification === "Likely look-alike" ? "warn" : "info";
     const res = $("#mon-result");
     res.hidden = false;
-    res.innerHTML = `<h2>${h(r.reference)} &middot; ${h(r.classification || "")}</h2>
+    res.innerHTML = `
+      <div class="outcome t-${tone}">
+        <div class="outcome-main">
+          <div class="outcome-verdict">${h(r.classification || "-")}</div>
+          <div class="muted">${h(r.reference)} &middot; ${h(r.verdict || "")}</div>
+        </div>
+        <div class="outcome-conf">${confBadge(r.confidence)}</div>
+      </div>
       ${kv([
-        ["Verdict", h(r.verdict || "-")],
-        ["Confidence", confBadge(r.confidence)],
-        ["Jurisdiction", h((r.jurisdiction?.primary_name) || r.jurisdiction?.primary_code || "international waters")],
-        ["Prime suspect", r.prime_suspect ? `${h(r.prime_suspect.identity?.name)} (score ${num(r.prime_suspect.components ? r.confidence : null, 0)})` : "-"],
-        ["Candidates", r.n_candidates],
+        ["Jurisdiction", h(jname)],
+        ["Prime suspect", r.prime_suspect ? h(r.prime_suspect.identity?.name || "-") : "&mdash;"],
+        ["Candidates evaluated", r.n_candidates ?? "&mdash;"],
         ["Alert", r.alert_status ? alertBadge(r.alert_status) : "not raised"],
       ])}
-      <div class="row"><button class="btn btn-primary" id="mon-open">Open investigation workstation</button></div>`;
+      <div class="row" style="margin-top:.8rem"><button class="btn btn-primary" id="mon-open">Open investigation workstation</button></div>`;
     $("#mon-open").addEventListener("click", () => ctx.go(`#/workstation/${r.investigation_id}`));
   });
 }
@@ -513,6 +567,7 @@ async function spillAnalysis(ctx, params) {
   if (!invs.length) { $("#sa-body").innerHTML = `<p class="empty">No investigations.</p>`; return; }
 
   async function render(iid) {
+   try {
     const inv = await api.investigation(iid);
     const sm = inv.summary_metrics || {};
     const sar = sm.sar || {};
@@ -542,11 +597,17 @@ async function spillAnalysis(ctx, params) {
       </div>` : ""}
       <div class="grid cols-2">
         <div class="panel"><h2>Pipeline stages</h2><ul class="clean">${
-          (sar.pipeline || []).map((p) => `<li>${h(typeof p === "string" ? p : p.name || JSON.stringify(p))}</li>`).join("") || `<li class="muted">n/a</li>`
+          ((Array.isArray(sar.pipeline) && sar.pipeline)
+            || (Array.isArray(sar.pipeline?.timings) && sar.pipeline.timings)
+            || []).map((p) => {
+              if (typeof p === "string") return `<li>${h(p)}</li>`;
+              const name = p.step || p.name;
+              return `<li>${name ? h(name) + (p.seconds != null ? ` <span class="muted mono">${num(p.seconds, 3)} s</span>` : "") : h(JSON.stringify(p))}</li>`;
+            }).join("") || `<li class="muted">n/a</li>`
         }</ul>
         <h3>Acquisition</h3>${kv([
           ["Acquired", when(sar.acquisition)],
-          ["Bounding box", `<span class="mono">${(sar.bounding_box || sar.bbox || []).map((v) => num(v, 2)).join(", ")}</span>`],
+          ["Bounding box", `<span class="mono">${bboxStr(sar.bounding_box || sar.bbox)}</span>`],
           ["Pixel size", `${num(sar.pixel_size_m, 1)} m`],
         ])}</div>
         <div class="panel"><h2>Detections</h2>${
@@ -565,6 +626,9 @@ async function spillAnalysis(ctx, params) {
           }).join("") || `<p class="muted">No discrete detections (scene rejected).</p>`
         }</div>
       </div>${raw(sar)}`;
+   } catch (e) {
+     $("#sa-body").innerHTML = `<div class="panel"><p class="empty">Could not render this scene's analysis (${h(e.message || e)}).</p></div>`;
+   }
   }
   $("#sa-inv").addEventListener("change", (e) => render(e.target.value));
   render(id);

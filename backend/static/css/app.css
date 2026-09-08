@@ -25,6 +25,7 @@
   --ok: #12934f;
   --warn: #b9770a;
   --danger: #d33b3b;
+  --danger-2: #e0662a;   /* orange — critical, distinct from amber look-alike */
   --info: #1f8fd6;
   /* elevation — restrained */
   --shadow-1: 0 1px 2px rgba(20, 32, 55, .06), 0 1px 1px rgba(20, 32, 55, .04);
@@ -53,6 +54,7 @@
   --ok: #2fd08a;
   --warn: #f2b12e;
   --danger: #ff6a6a;
+  --danger-2: #ff9052;
   --info: #63c2ff;
   --shadow-1: 0 1px 2px rgba(0, 0, 0, .35);
   --shadow-2: 0 8px 24px -10px rgba(0, 0, 0, .55);
@@ -258,6 +260,26 @@ code {
 }
 .kpi .v { font-size: 1.4rem; font-weight: 800; letter-spacing: .01em; }
 .kpi .l { color: var(--muted); font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; margin-top: .1rem; }
+/* semantic tone: coloured value + a thin left accent (compact, no big cards) */
+.kpi[class*="t-"] { padding-left: 1rem; position: relative; }
+.kpi[class*="t-"]::before {
+  content: ""; position: absolute; left: 0; top: 11px; bottom: 11px;
+  width: 3px; border-radius: 999px; background: var(--faint);
+}
+.kpi.t-crit .v { color: var(--danger); }   .kpi.t-crit::before { background: var(--danger); }
+.kpi.t-hot  .v { color: var(--danger-2); } .kpi.t-hot::before  { background: var(--danger-2); }
+.kpi.t-warn .v { color: var(--warn); }     .kpi.t-warn::before { background: var(--warn); }
+.kpi.t-info .v { color: var(--info); }      .kpi.t-info::before { background: var(--info); }
+.kpi.t-ok   .v { color: var(--ok); }        .kpi.t-ok::before   { background: var(--ok); }
+
+/* compact live-status strip under the KPI row */
+.statline { font-size: .82rem; color: var(--muted); margin: -.2rem 0 1rem; }
+.statline b { color: var(--text); font-weight: 700; }
+.statline b.tone-crit { color: var(--danger); }
+.statline b.tone-warn { color: var(--warn); }
+.statline b.tone-info { color: var(--info); }
+.h2-note { font-weight: 400; font-size: .8rem; color: var(--muted); }
+.col-span-2 { grid-column: 1 / -1; }
 
 /* ---- badges ------------------------------------------------ */
 .badge {
@@ -309,6 +331,23 @@ table.data tr.clickable { cursor: pointer; }
 .pstep .t { font-weight: 700; }
 .pstep .d { color: var(--muted); font-size: .82rem; margin-top: .15rem; word-break: break-word; }
 .pstep .s { color: var(--muted); font-size: .75rem; }
+.pstep.skip { opacity: .55; }
+.pstep.skip .n { background: var(--panel-2); color: var(--muted); border-color: var(--line); }
+.pstep.warn { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+.pstep.warn .n { background: var(--warn); border-color: var(--warn); color: #1a1205; }
+
+/* pipeline outcome banner */
+.outcome {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: .8rem 1rem; border: 1px solid var(--line); border-left: 4px solid var(--faint);
+  border-radius: var(--r); background: var(--panel-2); margin-bottom: .9rem;
+}
+.outcome.t-crit { border-left-color: var(--danger); }
+.outcome.t-warn { border-left-color: var(--warn); }
+.outcome.t-info { border-left-color: var(--info); }
+.outcome-verdict { font-size: 1.05rem; font-weight: 800; }
+.outcome.t-crit .outcome-verdict { color: var(--danger); }
+.outcome.t-warn .outcome-verdict { color: var(--warn); }
 
 /* ---- workstation ---------------------------------- */
 .workstation { display: grid; grid-template-columns: 1.1fr 1.2fr .95fr; gap: 1rem; }
@@ -427,3 +466,53 @@ iframe.dossier { width: 100%; height: 70vh; border: 1px solid var(--line); borde
 .leaflet-bar a { background: var(--panel); color: var(--text); border-color: var(--line); }
 .leaflet-bar a:hover { background: var(--panel-2); }
 .leaflet-control-zoom a { border-radius: var(--r-sm) !important; }
+
+/* ---- anomaly markers (concentric "target", tone by classification) --- */
+.anom-div { display: grid; place-items: center; }
+.anom {
+  position: relative; width: 13px; height: 13px; border-radius: 50%;
+  background: var(--ac, var(--info));
+  box-shadow: 0 0 0 2px var(--panel), 0 0 0 3.5px var(--ac, var(--info));
+}
+.anom.t-crit { --ac: var(--danger); }
+.anom.t-hot  { --ac: var(--danger-2); }
+.anom.t-warn { --ac: var(--warn); }
+.anom.t-info { --ac: var(--info); }
+.anom.pulse::after {
+  content: ""; position: absolute; inset: -3px; border-radius: 50%;
+  border: 2px solid var(--ac); animation: anom-pulse 1.9s ease-out infinite;
+}
+@keyframes anom-pulse { 0% { transform: scale(.6); opacity: .85; } 100% { transform: scale(2.4); opacity: 0; } }
+.anom-div.sel .anom { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--ac, var(--info)), 0 0 0 8px color-mix(in srgb, var(--ac, var(--info)) 35%, transparent); }
+
+/* ---- on-map legend ---------------------------------- */
+.map-legend {
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--line); border-radius: var(--r);
+  padding: .5rem .6rem; box-shadow: var(--shadow-1);
+  font-size: .74rem; color: var(--text); line-height: 1.6;
+  backdrop-filter: blur(3px);
+}
+.map-legend .lg-row { display: flex; align-items: center; gap: .5rem; white-space: nowrap; }
+.map-legend .sw { flex: none; display: inline-block; }
+.map-legend .sw.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--lc, var(--info)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--lc, var(--info)) 30%, transparent); }
+.map-legend .sw.line { width: 16px; height: 0; border-top: 3px solid var(--lc, var(--info)); border-radius: 2px; }
+.map-legend .sw.line.dash { border-top-style: dashed; }
+.map-legend .sw.ring { width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--lc, var(--warn)); }
+.map-legend .sw.pulse { position: relative; }
+.map-legend .t-crit { --lc: var(--danger); }
+.map-legend .t-hot  { --lc: var(--danger-2); }
+.map-legend .t-warn { --lc: var(--warn); }
+.map-legend .t-info { --lc: var(--info); }
+.map-legend .t-ok   { --lc: var(--ok); }
+.map-legend .t-mut  { --lc: var(--faint); }
+
+/* ---- offline-basemap badge -------------------------- */
+.map-badge {
+  display: flex; align-items: center; gap: .4rem;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--line-2); border-radius: 999px;
+  padding: .2rem .6rem; font-size: .72rem; color: var(--muted);
+  box-shadow: var(--shadow-1); backdrop-filter: blur(3px);
+}
+.map-badge-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); flex: none; }

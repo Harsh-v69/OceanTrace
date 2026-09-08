@@ -31,14 +31,18 @@ export function makeMap(el, opts = {}) {
     className: dark ? "tiles-dark" : "",
   });
 
-  let failed = 0, fellBack = false;
-  tiles.on("tileerror", () => {
-    failed += 1;
-    if (failed === 4 && !fellBack) { fellBack = true; offlineBasemap(map, el, dark); }
-  });
-  tiles.on("tileload", () => { failed = 0; });
+  let failed = 0, fellBack = false, anyLoaded = false;
+  const goOffline = () => {
+    if (fellBack || anyLoaded) return;
+    fellBack = true;
+    offlineBasemap(map, el, dark);
+  };
+  tiles.on("tileerror", () => { failed += 1; if (failed >= 3) goOffline(); });
+  tiles.on("tileload", () => { anyLoaded = true; failed = 0; });
   tiles.addTo(map);
 
+  // if not a single tile has loaded after a few seconds, assume we're offline
+  setTimeout(goOffline, 6500);
   // let the container settle before Leaflet measures it
   setTimeout(() => map.invalidateSize(), 60);
   return map;
@@ -48,6 +52,7 @@ export function makeMap(el, opts = {}) {
    coastline as a vector layer so the map still shows a recognisable outline. */
 let _coastlineCache = null;
 async function offlineBasemap(map, el, dark) {
+  if (el.classList.contains("no-tiles")) return;   // already fell back
   el.classList.add("no-tiles");
   map.eachLayer((lyr) => { if (lyr instanceof L.TileLayer) map.removeLayer(lyr); });
   L.rectangle([[-60, -200], [75, 200]], {
@@ -65,19 +70,45 @@ async function offlineBasemap(map, el, dark) {
       interactive: false,
     }).addTo(map);
   } catch { /* no coastline file - the plain ocean canvas is the fallback */ }
+
+  // tell the operator the basemap is degraded, not broken
+  const badge = L.control({ position: "bottomleft" });
+  badge.onAdd = () => {
+    const d = L.DomUtil.create("div", "map-badge");
+    d.innerHTML = `<span class="map-badge-dot"></span>Offline map &middot; coastline only`;
+    return d;
+  };
+  badge.addTo(map);
 }
 
-const CONF_COLOR = (c) => (c >= 0.75 ? "#ff6b6b" : c >= 0.5 ? "#f0b429" : "#66c2ff");
+/* tone from the canonical scene classification first, confidence second */
+function anomTone(confidence, classification) {
+  if (classification === "Likely look-alike") return "warn";
+  if (classification === "No significant anomaly") return "info";
+  return confidence >= 0.75 ? "crit" : confidence >= 0.5 ? "hot" : "info";
+}
 
-export function anomalyMarker(map, lat, lon, { confidence = 0, label = "Oil-like anomaly", ref = "" } = {}) {
-  const m = L.circleMarker([lat, lon], {
-    radius: 9, color: CONF_COLOR(confidence), weight: 2,
-    fillColor: CONF_COLOR(confidence), fillOpacity: 0.35,
+export function anomalyMarker(map, lat, lon, opts = {}) {
+  const { confidence = 0, label = "Oil-like anomaly", ref = "", classification = "" } = opts;
+  const tone = anomTone(confidence, classification);
+  const m = L.marker([lat, lon], {
+    icon: L.divIcon({
+      className: "anom-div",
+      html: `<span class="anom t-${tone}${tone === "crit" ? " pulse" : ""}"></span>`,
+      iconSize: [28, 28], iconAnchor: [14, 14],
+    }),
+    keyboard: false,
+    riseOnHover: true,
   }).addTo(map);
   m.bindPopup(
-    `<b>${label}</b><br>${ref ? ref + "<br>" : ""}confidence ${(confidence * 100).toFixed(0)}%` +
+    `<b>${label}</b>${ref ? `<br><span class="mono">${ref}</span>` : ""}` +
+    `<br>confidence ${(confidence * 100).toFixed(0)}%` +
     `<br><span class="mono">${lat.toFixed(3)}, ${lon.toFixed(3)}</span>`
   );
+  m.setSelected = (on) => {
+    const icon = m.getElement && m.getElement();
+    if (icon) icon.classList.toggle("sel", !!on);
+  };
   return m;
 }
 
@@ -221,6 +252,36 @@ export function heat(map, cells, bbox) {
   // cells: flat list of probabilities over a grid inside bbox [w,s,e,n]
   if (!cells || !cells.length || !bbox) return [];
   return []; // kept lightweight for CPU/offline; heatmap omitted in favour of the ellipse
+}
+
+/* A small on-map key. Pass the ids relevant to the current view. */
+const LEGEND_ITEMS = {
+  "anom-hi":     ["sw dot t-crit pulse", "High-confidence anomaly"],
+  "anom-mid":    ["sw dot t-hot", "Medium-confidence anomaly"],
+  "anom-la":     ["sw dot t-warn", "Likely look-alike"],
+  "anom-lo":     ["sw dot t-info", "Low-confidence / cleared"],
+  "track-prime": ["sw line t-crit", "Prime suspect track"],
+  "track-other": ["sw line t-mut", "Other vessel track"],
+  "loiter":      ["sw ring t-warn", "Loitering"],
+  "blackout":    ["sw line dash t-crit", "AIS blackout"],
+  "origin":      ["sw dot t-ok", "Reconstructed origin"],
+  "beach":       ["sw dot t-crit", "Shoreline contact"],
+};
+export function mapLegend(map, keys, opts = {}) {
+  const ids = (keys && keys.length ? keys : Object.keys(LEGEND_ITEMS)).filter((k) => LEGEND_ITEMS[k]);
+  if (!ids.length) return null;
+  const ctl = L.control({ position: opts.position || "bottomright" });
+  ctl.onAdd = () => {
+    const d = L.DomUtil.create("div", "map-legend");
+    d.innerHTML = ids.map((k) => {
+      const [cls, label] = LEGEND_ITEMS[k];
+      return `<span class="lg-row"><span class="${cls}"></span>${label}</span>`;
+    }).join("");
+    L.DomEvent.disableClickPropagation(d);
+    return d;
+  };
+  ctl.addTo(map);
+  return ctl;
 }
 
 export function fit(map, layers) {
