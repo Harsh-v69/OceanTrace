@@ -1,12 +1,13 @@
 /* All screens for the Operations Console. Each view renders into ctx.root and
    wires its own events. ctx = { user, root, go, toast }. */
 
-import { api, fetchText } from "./api.js?v=ui14";
+import { api, fetchText } from "./api.js?v=ui17";
 import {
   makeMap, anomalyMarker, vesselMarker, trackLine, polygon, fit, L,
   vesselTrackLayer, vesselPopupHtml, shorelineContact, mapLegend,
   reconstructedDriftLine, overlayControl, clusterGroup,
-} from "./map.js?v=ui14";
+} from "./map.js?v=ui17";
+import { startTour, resetTour } from "./tour.js?v=ui17";
 
 /* -------------------------------------------------------------- helpers -- */
 const h = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -151,6 +152,23 @@ const PROV = {
 function provBadge(kind) {
   const [label, tone, title] = PROV[kind] || [String(kind).toUpperCase(), "mut", ""];
   return `<span class="prov prov-${tone}" title="${h(title)}">${h(label)}</span>`;
+}
+
+/* ---- contextual [?] tooltips for domain terms -------------------------- */
+const GLOSSARY = {
+  "oil-like anomaly": "A dark SAR patch the RF+GB ensemble classifies as consistent with a mineral-oil slick — not a biogenic film or a low-wind look-alike.",
+  "look-alike": "A dark patch caused by low wind, biogenic surface films, rain cells or similar — not mineral oil. Filtered out, so it raises no alert.",
+  "hindcast": "Running the drift model backward from the observed slick to reconstruct where and when the oil was released.",
+  "forecast": "Running the drift model forward from now (6 / 12 / 24 / 48 h) to project where the slick travels and whether it reaches shore.",
+  "release window": "The time span, relative to the observation, in which the oil was most likely discharged — from the backward drift plus the diffusive age inversion.",
+  "attribution score": "A 0–100 fusion of 8 evidence components (space-time match, CPA, dwell, AIS blackout, route deviation, AIS anomaly, vessel prior, axis alignment) ranking how likely each vessel is the source.",
+  "ais anomaly": "The POSEatSea autoencoder's reconstruction error on a vessel's AIS features — high error flags unusual movement near the slick.",
+};
+function helpTip(term) {
+  const key = String(term).toLowerCase();
+  const tip = GLOSSARY[key];
+  if (!tip) return "";
+  return `<span class="help" tabindex="0" role="note" aria-label="${h(term)}: ${h(tip)}" data-tip="${h(tip)}">?</span>`;
 }
 /* SYNTHETIC DEMO for a scenario-run investigation, LIVE for an uploaded scene */
 function sceneProv(m) {
@@ -556,7 +574,7 @@ async function workstation(ctx, params) {
         <div class="panel">
           <h2>Anomaly ${provBadge(sceneProv(m))}</h2>
           <div class="anom-head">
-            <span class="cls-chip t-${clsTone}">${h(cls)}</span>
+            <span class="cls-chip t-${clsTone}">${h(cls)} ${helpTip(cls === "Likely look-alike" ? "look-alike" : "oil-like anomaly")}</span>
             <span class="cls-conf">${sar.confidence != null ? pct(sar.confidence) : "n/a"} <small>confidence</small></span>
           </div>
           ${kv([
@@ -568,14 +586,14 @@ async function workstation(ctx, params) {
             ...(m.iou ? [["IoU vs ground truth", num(m.iou.value, 3)]] : []),
           ])}
         </div>
-        <div class="panel"><h2>Reconstructed origin ${provBadge("reconstructed")}</h2>${kv([
+        <div class="panel"><h2>Reconstructed origin ${provBadge("reconstructed")} ${helpTip("hindcast")}</h2>${kv([
           ["Best estimate", `<span class="mono">${(hind.best_estimate || []).map((v) => num(v, 3)).join(", ") || "&mdash;"}</span>`],
           ["Uncertainty radius", `${num(hind.uncertainty_radius_km, 1)} km`],
-          ["Release window", (hind.release_window_h || []).map((v) => `T${v >= 0 ? "+" : ""}${num(v, 1)}h`).join(" .. ") || "&mdash;"],
+          ["Release window", `${(hind.release_window_h || []).map((v) => `T${v >= 0 ? "+" : ""}${num(v, 1)}h`).join(" .. ") || "&mdash;"} ${helpTip("release window")}`],
           ["Age estimate", `${num(hind.age_point_estimate_h, 1)} h (${h(hind.age_source || "-")})`],
           ["Feedback loop", m.feedback_loop?.converged ? `converged in ${m.feedback_loop.n_iterations} iter` : `${m.feedback_loop?.n_iterations ?? "-"} iter`],
         ])}</div>
-        <div class="panel"><h2>Forward forecast &amp; shoreline ${provBadge("model")}</h2>${
+        <div class="panel"><h2>Forward forecast &amp; shoreline ${provBadge("model")} ${helpTip("forecast")}</h2>${
           (fore.horizons || []).length
             ? `<table class="data"><thead><tr><th>Horizon</th><th>Centroid</th><th>Radius</th><th>Beached</th></tr></thead><tbody>${
               fore.horizons.map((hz) => `<tr><td>+${h(hz.horizon_h ?? hz.t_h)}h</td>
@@ -610,7 +628,7 @@ async function workstation(ctx, params) {
 
       <div class="wcol ws-right">
         <div class="panel">
-          <h2>Ranked candidates <span class="h2-note">${cands.length || 0}</span></h2>
+          <h2>Ranked candidates ${helpTip("attribution score")} <span class="h2-note">${cands.length || 0}</span></h2>
           <p class="muted" style="font-size:.8rem">${h(attr.summary?.verdict || "No attribution for this scene.")}</p>
           <div id="ws-cands">${cands.map((c) => candidateCard(c, truth)).join("") || emptyState("ship", "No candidates", "No vessels fell inside the space-time search window for this scene.")}</div>
         </div>
@@ -829,7 +847,7 @@ async function vesselIntel(ctx) {
           heading ${tvm.mean_heading_deg != null ? num(tvm.mean_heading_deg, 0) + "°" : "-"} ·
           ${(tv.loiter || []).length} loiter span(s) · ${(tv.blackouts || []).length} AIS gap(s)</p>
         <div class="grid cols-3">
-          <div><h3>AIS autoencoder</h3>${kv([
+          <div><h3>AIS autoencoder ${helpTip("ais anomaly")}</h3>${kv([
             ["Peak recon. error", num(ae.peak_reconstruction_error, 4)],
             ["Threshold", num(ae.threshold, 4)],
             ["Pings near slick", ae.pings_near_slick ?? "-"],
@@ -1318,12 +1336,19 @@ async function profile(ctx) {
     </div>
     <div class="panel"><h2>Test SMS delivery</h2><div class="row">
       <button class="btn btn-primary" id="pf-sms">Send a test SMS to ${h(u.phone_number || "(no number on file)")}</button>
-      <span id="pf-msg" class="muted"></span></div></div>`);
+      <span id="pf-msg" class="muted"></span></div></div>
+    <div class="panel"><h2>Guided tour</h2>
+      <p class="muted" style="font-size:.85rem">An 8-step walkthrough of the workflow — Mission Control through the Evidence dossier.</p>
+      <div class="row"><button class="btn" id="pf-tour">Restart the guided tour</button></div></div>`);
   $("#pf-sms").addEventListener("click", async () => {
     $("#pf-sms").disabled = true;
     try { const a = await api.testSms(); $("#pf-msg").textContent = `#${a.id}: ${a.status} via ${a.provider || "mock"}.`; }
     catch (e) { $("#pf-msg").textContent = e.message; }
     $("#pf-sms").disabled = false;
+  });
+  $("#pf-tour").addEventListener("click", () => {
+    resetTour();
+    startTour({ nav: (hash) => { location.hash = hash; } });
   });
 }
 

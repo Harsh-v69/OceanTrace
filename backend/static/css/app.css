@@ -361,6 +361,43 @@ code {
 .tl-tick.tl-fc::after { background: var(--info); }
 .tl-tick:hover > span { color: var(--text); }
 
+/* ---- contextual [?] tooltip -------------------------------------- */
+.help {
+  display: inline-grid; place-items: center; width: 14px; height: 14px;
+  border-radius: 50%; border: 1px solid var(--line-2); background: var(--panel-2);
+  color: var(--muted); font-size: .62rem; font-weight: 800; cursor: help;
+  position: relative; vertical-align: middle; line-height: 1; user-select: none;
+}
+.help:hover, .help:focus-visible { color: var(--text); border-color: var(--brand); outline: none; }
+.help::after {
+  content: attr(data-tip);
+  position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%);
+  width: max-content; max-width: 260px; white-space: normal;
+  background: var(--panel); color: var(--text); text-align: left;
+  border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  box-shadow: var(--shadow-2); padding: .5rem .6rem;
+  font-size: .74rem; font-weight: 500; line-height: 1.45; letter-spacing: 0;
+  opacity: 0; pointer-events: none; transition: opacity .12s; z-index: 80;
+}
+.help:hover::after, .help:focus-visible::after { opacity: 1; }
+
+/* ---- guided tour ---------------------------------------------- */
+.tour-overlay { position: fixed; inset: 0; z-index: 200; pointer-events: none; }
+.tour-spot {
+  position: absolute; display: none; border-radius: 10px;
+  box-shadow: 0 0 0 9999px rgba(4, 10, 20, .58), 0 0 0 2px var(--brand);
+  transition: left .25s, top .25s, width .25s, height .25s;
+}
+.tour-card {
+  position: absolute; pointer-events: auto; width: min(360px, calc(100vw - 24px));
+  background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2); padding: 1rem 1.1rem; opacity: 0; transition: opacity .18s, left .2s, top .2s;
+}
+.tour-step { font-size: .68rem; text-transform: uppercase; letter-spacing: .07em; color: var(--faint); font-weight: 700; }
+.tour-title { font-size: 1.05rem; margin: .25rem 0 .4rem; }
+.tour-body { font-size: .85rem; color: var(--muted); line-height: 1.55; margin: 0 0 .9rem; }
+.tour-actions { display: flex; align-items: center; gap: .4rem; }
+
 /* ---- badges ------------------------------------------------ */
 .badge {
   display: inline-block; padding: .12rem .5rem; border-radius: 999px;

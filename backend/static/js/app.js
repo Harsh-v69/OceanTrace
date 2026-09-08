@@ -1,8 +1,9 @@
 /* Bootstrap: auth gate, role-filtered grouped nav, hash router, theme toggle,
    live API-status indicator. */
 
-import { api, getToken, getStoredUser } from "./api.js?v=ui14";
-import { views, NAV, NAV_GROUPS, wireAuth } from "./views.js?v=ui14";
+import { api, getToken, getStoredUser } from "./api.js?v=ui17";
+import { views, NAV, NAV_GROUPS, wireAuth } from "./views.js?v=ui17";
+import { maybeAutoStart } from "./tour.js?v=ui17";
 
 const ROLE_RANK = { PILOT: 1, REGIONAL: 2, NATIONAL: 3 };
 const THEME_KEY = "sn.theme";
@@ -163,6 +164,7 @@ function showApp(user) {
   showApp._hp = setInterval(pollHealth, 30000);
   if (!location.hash) location.hash = `#/${DEFAULT_VIEW}`;
   else route();
+  maybeAutoStart({ nav: (hash) => { location.hash = hash; } });
 }
 function showAuth() {
   state.user = null;
