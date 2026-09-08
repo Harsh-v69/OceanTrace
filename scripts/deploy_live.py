@@ -32,8 +32,22 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 HOST = "127.0.0.1"
-PORT = int(os.getenv("PORT", "8000"))
 _IS_WIN = os.name == "nt"
+
+
+def _free_port(preferred: int) -> int:
+    """Return `preferred` if we can bind it, otherwise the next free port."""
+    for p in [preferred, *range(8010, 8080)]:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((HOST, p))
+                return p
+            except OSError:
+                continue
+    return preferred
+
+
+PORT = _free_port(int(os.getenv("PORT", "8000")))
 
 
 def _print_box(public_url: str) -> None:
@@ -89,8 +103,27 @@ def _stop_server(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
+def _saved_ngrok_token() -> str | None:
+    """Read the authtoken from ngrok's own config file if it's already there
+    (`ngrok config add-authtoken ...` writes it, so does a prior pyngrok run)."""
+    candidates = [
+        Path(os.getenv("LOCALAPPDATA", "")) / "ngrok" / "ngrok.yml",
+        Path.home() / ".config" / "ngrok" / "ngrok.yml",
+        Path.home() / ".ngrok2" / "ngrok.yml",
+    ]
+    for p in candidates:
+        try:
+            for line in p.read_text(encoding="utf-8").splitlines():
+                if line.strip().startswith("authtoken:"):
+                    return line.split(":", 1)[1].strip().strip("'\"")
+        except OSError:
+            continue
+    return None
+
+
 def main() -> int:
-    token = os.getenv("NGROK_AUTHTOKEN") or os.getenv("NGROK_AUTH_TOKEN")
+    token = (os.getenv("NGROK_AUTHTOKEN") or os.getenv("NGROK_AUTH_TOKEN")
+             or _saved_ngrok_token())
 
     try:
         from pyngrok import conf, ngrok
@@ -101,6 +134,12 @@ def main() -> int:
 
     if token:
         conf.get_default().auth_token = token
+    else:
+        print("\nNo ngrok authtoken found. Run once:\n"
+              "  ngrok config add-authtoken <YOUR_TOKEN>\n"
+              "  (free token at https://dashboard.ngrok.com/get-started/your-authtoken)\n"
+              "or set NGROK_AUTHTOKEN before running this script.\n", file=sys.stderr)
+        return 1
 
     # 1) start the live-reloading API (watch only backend/, not .venv)
     cmd = [
