@@ -185,40 +185,60 @@ function _interpPing(pings, tH) {
 export function vesselTrackLayer(map, view, opts = {}) {
   const pings = view?.pings || [];
   const g = L.layerGroup().addTo(map);
-  if (pings.length < 1) return { group: g, endMarker: null, positionAt: () => {}, setSelected: () => {} };
+  const routes = L.layerGroup().addTo(g);        // observed + predicted lines
+  const positions = L.layerGroup().addTo(g);     // start dot, loiter, blackout, timeline dot
+  const noop = () => {};
+  if (pings.length < 1) {
+    return { group: g, routes, positions, endMarker: null, predictedLine: null,
+      positionAt: noop, setSelected: noop, setFaded: noop };
+  }
 
   const prime = opts.prime ?? view?.attribution?.is_prime;
   const color = opts.color || (prime ? "#ff6b6b" : "#8aa0bd");
   const latlngs = pings.map((p) => [p.lat, p.lon]);
 
+  // --- OBSERVED AIS route: solid ---
+  const obsTarget = opts.observedGroup || routes;
   let halo = null, mainLine = null;
   if (latlngs.length > 1) {
-    halo = L.polyline(latlngs, { color, weight: prime ? 10 : 8, opacity: 0 }).addTo(g);
-    mainLine = L.polyline(latlngs, { color, weight: prime ? 3 : 2, opacity: 0.9 }).addTo(g);
+    halo = L.polyline(latlngs, { color, weight: prime ? 10 : 8, opacity: 0 }).addTo(obsTarget);
+    mainLine = L.polyline(latlngs, { color, weight: prime ? 3 : 2, opacity: 0.9 }).addTo(obsTarget);
   }
-  // blackout gaps as dashed segments between the fixes bracketing each gap
+
+  // --- PREDICTED route (LSTM next-position path): dashed ---
+  let predictedLine = null;
+  const pp = (opts.predictedPath || []).filter((r) => r && r.lat != null);
+  if (pp.length > 1) {
+    predictedLine = L.polyline(pp.map((r) => [r.lat, r.lon]), {
+      color, weight: 2, opacity: 0.85, dashArray: "8 6", lineCap: "round",
+    }).bindPopup(`<b>${view.name || "Vessel"}</b> — predicted track (LSTM)`
+      + `<br><span class="muted">model-estimated next positions</span>`);
+    if (opts.predictedGroup) predictedLine.addTo(opts.predictedGroup); else predictedLine.addTo(routes);
+  }
+
+  // blackout gaps as dashed red segments; loiter as amber rings
   for (const b of (view.blackouts || [])) {
     const a = _interpPing(pings, b.start_h), c = _interpPing(pings, b.end_h);
     if (a && c) L.polyline([a, c], { color: "#ff6b6b", weight: 2, dashArray: "3 6", opacity: 0.9 })
-      .addTo(g).bindPopup(`AIS dark ${Math.round(b.minutes)} min`);
+      .addTo(positions).bindPopup(`AIS dark ${Math.round(b.minutes)} min`);
   }
-  // loiter spans as amber rings at their midpoint
   for (const s of (view.loiter || [])) {
     const mid = _interpPing(pings, (s.start_h + s.end_h) / 2);
     if (mid) L.circleMarker(mid, { radius: 7, color: "#f0b429", weight: 2, fillOpacity: 0.15 })
-      .addTo(g).bindPopup(`Loitering ${Math.round(s.minutes)} min @ ${s.mean_sog_kn} kn`);
+      .addTo(positions).bindPopup(`Loitering ${Math.round(s.minutes)} min @ ${s.mean_sog_kn} kn`);
   }
-  // start (hollow) + end (vessel glyph)
-  L.circleMarker(latlngs[0], { radius: 4, color, weight: 2, fillOpacity: 0 }).addTo(g);
+  L.circleMarker(latlngs[0], { radius: 4, color, weight: 2, fillOpacity: 0 }).addTo(positions);
+
+  // end (vessel glyph) - goes to a cluster group if one is supplied
   const end = latlngs[latlngs.length - 1];
   const rank = view?.attribution?.rank;
   const endMarker = L.marker(end, {
     icon: L.divIcon({
-      className: "vessel-div",
-      html: `<span style="--vc:${color}">${rank ? "#" + rank : "▲"}</span>`,
+      className: "vessel-div", html: `<span style="--vc:${color}">${rank ? "#" + rank : "▲"}</span>`,
       iconSize: [22, 22], iconAnchor: [11, 11],
     }),
-  }).addTo(g);
+  });
+  (opts.markerGroup || positions).addLayer(endMarker);
   if (opts.onClick) endMarker.on("click", () => opts.onClick(view));
   else endMarker.bindPopup(vesselPopupHtml(view));
 
@@ -226,17 +246,64 @@ export function vesselTrackLayer(map, view, opts = {}) {
   function positionAt(tH) {
     const p = _interpPing(pings, tH);
     if (!p) return;
-    if (!dot) dot = L.circleMarker(p, { radius: 5, color, weight: 2, fillColor: color, fillOpacity: 0.9 }).addTo(g);
+    if (!dot) dot = L.circleMarker(p, { radius: 5, color, weight: 2, fillColor: color, fillOpacity: 0.9 }).addTo(positions);
     else dot.setLatLng(p);
   }
   function setSelected(on) {
     if (halo) halo.setStyle({ opacity: on ? 0.28 : 0 });
     if (mainLine) mainLine.setStyle({ weight: on ? (prime ? 4.5 : 3.5) : (prime ? 3 : 2) });
+    if (predictedLine) predictedLine.setStyle({ opacity: on ? 1 : 0.55, weight: on ? 2.5 : 2 });
     const el = endMarker && endMarker.getElement && endMarker.getElement();
     if (el) el.classList.toggle("sel", !!on);
     if (on && mainLine) mainLine.bringToFront();
   }
-  return { group: g, endMarker, positionAt, setSelected };
+  function setFaded(on) {
+    const o = on ? 0.18 : 0.9;
+    if (mainLine) mainLine.setStyle({ opacity: o });
+    if (predictedLine) predictedLine.setStyle({ opacity: on ? 0.12 : 0.7 });
+    positions.eachLayer((l) => l.setStyle && l.setStyle({ opacity: on ? 0.2 : 0.9 }));
+    const el = endMarker && endMarker.getElement && endMarker.getElement();
+    if (el) el.style.opacity = on ? "0.3" : "1";
+  }
+  return { group: g, routes, positions, endMarker, predictedLine, positionAt, setSelected, setFaded };
+}
+
+/* Dotted line = reconstructed drift path (physics reverse-drift centroid). */
+export function reconstructedDriftLine(map, hindcastFrames, opts = {}) {
+  const pts = (hindcastFrames || [])
+    .map((f) => {
+      const p = f.points || [];
+      if (!p.length) return null;
+      let a = 0, b = 0;
+      for (const q of p) { a += q[0]; b += q[1]; }
+      return [a / p.length, b / p.length];
+    })
+    .filter(Boolean);
+  if (pts.length < 2) return null;
+  return L.polyline(pts, {
+    color: opts.color || "#f0b429", weight: 2, opacity: 0.9,
+    dashArray: "1 6", lineCap: "round",
+  }).bindPopup("Reconstructed drift path (physics reverse-drift)");
+}
+
+/* Overlay checkboxes for the map. groups: { label: L.Layer }. */
+export function overlayControl(map, groups, opts = {}) {
+  const overlays = {};
+  for (const [label, layer] of Object.entries(groups)) if (layer) overlays[label] = layer;
+  return L.control.layers(null, overlays, {
+    collapsed: opts.collapsed ?? true, position: opts.position || "topright",
+  }).addTo(map);
+}
+
+/* Marker cluster group (vendored plugin); plain layerGroup if it failed to load. */
+export function clusterGroup(opts = {}) {
+  if (typeof L.markerClusterGroup === "function") {
+    return L.markerClusterGroup({
+      showCoverageOnHover: false, spiderfyOnMaxZoom: true,
+      maxClusterRadius: 44, ...opts,
+    });
+  }
+  return L.layerGroup();
 }
 
 export function vesselPopupHtml(view) {
@@ -265,16 +332,19 @@ export function heat(map, cells, bbox) {
 
 /* A small on-map key. Pass the ids relevant to the current view. */
 const LEGEND_ITEMS = {
-  "anom-hi":     ["sw dot t-crit pulse", "High-confidence anomaly"],
-  "anom-mid":    ["sw dot t-hot", "Medium-confidence anomaly"],
-  "anom-la":     ["sw dot t-warn", "Likely look-alike"],
-  "anom-lo":     ["sw dot t-info", "Low-confidence / cleared"],
-  "track-prime": ["sw line t-crit", "Prime suspect track"],
-  "track-other": ["sw line t-mut", "Other vessel track"],
-  "loiter":      ["sw ring t-warn", "Loitering"],
-  "blackout":    ["sw line dash t-crit", "AIS blackout"],
-  "origin":      ["sw dot t-ok", "Reconstructed origin"],
-  "beach":       ["sw dot t-crit", "Shoreline contact"],
+  "anom-hi":       ["sw dot t-crit pulse", "High-confidence anomaly"],
+  "anom-mid":      ["sw dot t-hot", "Medium-confidence anomaly"],
+  "anom-la":       ["sw dot t-warn", "Likely look-alike"],
+  "anom-lo":       ["sw dot t-info", "Low-confidence / cleared"],
+  "route-observed":     ["sw line t-mut", "Observed AIS route (solid)"],
+  "route-predicted":    ["sw line dash t-mut", "Predicted route · LSTM (dashed)"],
+  "route-reconstructed":["sw line dot t-warn", "Reconstructed drift · physics (dotted)"],
+  "track-prime":   ["sw line t-crit", "Prime suspect track"],
+  "track-other":   ["sw line t-mut", "Other vessel track"],
+  "loiter":        ["sw ring t-warn", "Loitering"],
+  "blackout":      ["sw line dash t-crit", "AIS blackout"],
+  "origin":        ["sw dot t-ok", "Reconstructed origin"],
+  "beach":         ["sw dot t-crit", "Shoreline contact"],
 };
 export function mapLegend(map, keys, opts = {}) {
   const ids = (keys && keys.length ? keys : Object.keys(LEGEND_ITEMS)).filter((k) => LEGEND_ITEMS[k]);

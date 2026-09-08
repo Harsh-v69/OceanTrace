@@ -408,6 +408,18 @@ def route_deviation_score(model, track_df: pd.DataFrame) -> tuple[float, Dict[st
     if not in_region:
         detail["caveat"] = ("Route-deviation extrapolated outside the model's training "
                             "region; the 0.37 km published accuracy does not apply.")
+
+    # Surface the model's predicted-vs-actual next-position path so the UI can
+    # draw the predicted vessel route (dashed). Nothing here changes the model -
+    # these are the positions rolling_predictions() already computed.
+    _pp = used[["pred_lat", "pred_lon", "actual_lat", "actual_lon", "deviation_km"]].to_numpy(float)
+    _step = max(1, len(_pp) // 40)
+    detail["predicted_path"] = [
+        {"lat": round(float(r[0]), 5), "lon": round(float(r[1]), 5),
+         "actual_lat": round(float(r[2]), 5), "actual_lon": round(float(r[3]), 5),
+         "deviation_km": round(float(r[4]), 3)}
+        for r in _pp[::_step]
+    ]
     return score, detail
 
 

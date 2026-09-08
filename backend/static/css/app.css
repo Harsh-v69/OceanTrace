@@ -419,8 +419,42 @@ table.data tr.clickable { cursor: pointer; }
 .ws-vessel {
   margin-top: .9rem; padding: .7rem .85rem; border: 1px solid var(--line);
   border-left: 3px solid var(--brand); border-radius: var(--r);
-  background: var(--panel-2); font-size: .82rem; line-height: 1.7;
+  background: var(--panel-2); font-size: .82rem; line-height: 1.55;
 }
+
+/* ---- route evidence panel (selected vessel) --------------------- */
+.route-ev-head { display: flex; align-items: baseline; gap: .4rem; font-size: .88rem; margin-bottom: .5rem; }
+.route-ev-row { display: grid; grid-template-columns: 30px 1fr; gap: .5rem; align-items: start; margin-bottom: .3rem; font-size: .78rem; }
+.route-swatch { align-self: center; height: 0; border-top: 3px solid var(--muted); border-radius: 2px; }
+.route-swatch.rs-solid { border-top-style: solid; border-top-color: var(--text); }
+.route-swatch.rs-dashed { border-top-style: dashed; border-top-color: var(--info); }
+.route-swatch.rs-dotted { border-top-style: dotted; border-top-width: 3px; border-top-color: var(--warn); }
+.vi-card { cursor: pointer; }
+.vi-card.sel { border-color: var(--brand); box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 26%, transparent); }
+
+/* ---- Leaflet layers control (overlay toggles) ------------------- */
+.leaflet-control-layers {
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  border: 1px solid var(--line); border-radius: var(--r);
+  box-shadow: var(--shadow-1); color: var(--text); backdrop-filter: blur(3px);
+}
+.leaflet-control-layers-expanded { padding: .5rem .7rem; font-size: .78rem; }
+.leaflet-control-layers-list label { display: flex; align-items: center; gap: .4rem; margin: .12rem 0; }
+.leaflet-control-layers input[type=checkbox] { accent-color: var(--brand); }
+.leaflet-control-layers-toggle { background-color: var(--panel); border-radius: var(--r-sm); }
+
+/* ---- marker cluster: match the app palette -------------------- */
+.marker-cluster {
+  background: color-mix(in srgb, var(--brand) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--brand) 45%, transparent);
+}
+.marker-cluster div {
+  background: color-mix(in srgb, var(--brand) 40%, var(--panel));
+  color: var(--text); font: 700 12px/30px ui-monospace, monospace;
+}
+.marker-cluster-small, .marker-cluster-small div,
+.marker-cluster-medium, .marker-cluster-medium div,
+.marker-cluster-large, .marker-cluster-large div { background-color: inherit; }
 
 /* ---- candidate cards ---------------------------------------------- */
 #ws-cands { display: flex; flex-direction: column; gap: .6rem; }
@@ -657,6 +691,7 @@ iframe.dossier { width: 100%; height: 70vh; border: 1px solid var(--line); borde
 .map-legend .sw.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--lc, var(--info)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--lc, var(--info)) 30%, transparent); }
 .map-legend .sw.line { width: 16px; height: 0; border-top: 3px solid var(--lc, var(--info)); border-radius: 2px; }
 .map-legend .sw.line.dash { border-top-style: dashed; }
+.map-legend .sw.line.dot { border-top-style: dotted; border-top-width: 3px; }
 .map-legend .sw.ring { width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--lc, var(--warn)); }
 .map-legend .sw.pulse { position: relative; }
 .map-legend .t-crit { --lc: var(--danger); }

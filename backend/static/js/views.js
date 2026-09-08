@@ -1,11 +1,12 @@
 /* All screens for the Operations Console. Each view renders into ctx.root and
    wires its own events. ctx = { user, root, go, toast }. */
 
-import { api, fetchText } from "./api.js?v=ui9";
+import { api, fetchText } from "./api.js?v=ui12";
 import {
   makeMap, anomalyMarker, vesselMarker, trackLine, polygon, fit, L,
   vesselTrackLayer, vesselPopupHtml, shorelineContact, mapLegend,
-} from "./map.js?v=ui9";
+  reconstructedDriftLine, overlayControl, clusterGroup,
+} from "./map.js?v=ui12";
 
 /* -------------------------------------------------------------- helpers -- */
 const h = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -136,6 +137,28 @@ const BAND_TONE = {
 function assessmentBadge(band) {
   const key = String(band || "").toUpperCase();
   return `<span class="band band-${BAND_TONE[key] || "mut"}">${h(BAND_LABEL[key] || band || "—")}</span>`;
+}
+
+/* compact explanation of the selected vessel's three route layers */
+function routeEvidencePanel(lyr) {
+  const v = lyr.view || {};
+  const rd = v.attribution?.route_deviation || {};
+  const hasPred = !!lyr.predictedLine;
+  const predTxt = hasPred
+    ? `LSTM next-position estimate${rd.max_deviation_km != null ? ` · peak ${num(rd.max_deviation_km, 1)} km off the observed track` : ""}`
+      + `${(rd.confidence === "degraded" || rd.aoi === false) ? " · extrapolated outside the training AOI, treat as indicative" : ""}.`
+    : "Not available — the LSTM produced no usable window for this vessel.";
+  const rows = [
+    ["Observed", "solid", "Actual AIS positions received from the vessel."],
+    ["Predicted", "dashed", predTxt],
+    ["Reconstructed drift", "dotted", "Physics reverse-drift centroid path — the slick traced back to the estimated origin."],
+  ];
+  return `<div class="route-ev">
+    <div class="route-ev-head"><b>${h(v.name || "Vessel")}</b> <span class="mono">${h(v.mmsi || "")}</span>
+      <span class="spacer"></span><b>${num(lyr.score, 1)}</b><span class="muted"> / 100 · ${h((lyr.assessment || "").replace(/_/g, " "))}</span></div>
+    ${rows.map(([k, style, txt]) => `<div class="route-ev-row">
+      <span class="route-swatch rs-${style}"></span><span><b>${h(k)}</b> — ${h(txt)}</span></div>`).join("")}
+  </div>`;
 }
 
 function candidateCard(c, truthMmsi) {
@@ -567,41 +590,64 @@ async function workstation(ctx, params) {
     }
   });
 
-  // ---- map: jurisdiction bounds, anomaly, origin, drift frames, vessel tracks ----
+  // ---- map: toggleable layers, routes (observed/predicted/reconstructed) ----
   const map = makeMap($("#ws-map"), inv.centroid_lat ? { center: [inv.centroid_lat, inv.centroid_lon], zoom: 8 } : {});
   const layers = [];
 
-  // jurisdiction bounds (best-effort; skipped silently if geometry unavailable)
-  drawJurisdictionBounds(map, m.jurisdiction).catch(() => {});
+  const gJur = L.featureGroup().addTo(map);
+  const gSpill = L.featureGroup().addTo(map);
+  const gOrigin = L.featureGroup().addTo(map);
+  const gDrift = L.featureGroup().addTo(map);
+  const gRecon = L.featureGroup().addTo(map);
+  const gObserved = L.featureGroup().addTo(map);
+  const gPredicted = L.featureGroup().addTo(map);
+  const gPositions = clusterGroup().addTo(map);
 
-  if (inv.centroid_lat != null)
-    layers.push(anomalyMarker(map, inv.centroid_lat, inv.centroid_lon, {
+  drawJurisdictionBounds(gJur, m.jurisdiction).catch(() => {});
+
+  if (inv.centroid_lat != null) {
+    const am = anomalyMarker(gSpill, inv.centroid_lat, inv.centroid_lon, {
       confidence: sar.confidence || 0, label: cls, ref: inv.reference, classification: cls,
-    }));
+    });
+    layers.push(am);
+  }
   if (hind.best_estimate)
-    layers.push(L.circleMarker(hind.best_estimate, {
+    L.circleMarker(hind.best_estimate, {
       radius: 6, color: "#2fd08a", weight: 2, fillColor: "#2fd08a", fillOpacity: 0.6,
-    }).addTo(map).bindPopup("Reconstructed release origin"));
+    }).addTo(gOrigin).bindPopup("Reconstructed release origin");
   if (hind.release_polygon?.length)
-    layers.push(polygon(map, hind.release_polygon, { color: "#2fd08a", lonlat: guessLonLat(hind.release_polygon) }));
+    polygon(gOrigin, hind.release_polygon, { color: "#2fd08a", lonlat: guessLonLat(hind.release_polygon) });
   if (hind.confidence_ellipse?.length)
-    polygon(map, hind.confidence_ellipse, { color: "#66c2ff", fillOpacity: 0.05, lonlat: guessLonLat(hind.confidence_ellipse) });
-  const beachLayer = shorelineContact(map, fore.coastal_impact);
-  if (beachLayer) layers.push(beachLayer);
+    polygon(gOrigin, hind.confidence_ellipse, { color: "#66c2ff", fillOpacity: 0.05, lonlat: guessLonLat(hind.confidence_ellipse) });
+  const beachLayer = shorelineContact(gSpill, fore.coastal_impact);
 
-  // vessels: one reconstructed track per candidate, linked to its card
+  // dotted reconstructed-drift path (physics reverse-drift centroid)
+  const frames = m.drift_frames || { hindcast: [], forecast: [] };
+  const reconLine = reconstructedDriftLine(gRecon, frames.hindcast);
+  if (reconLine) reconLine.addTo(gRecon);
+
+  // vessels: observed (solid) + predicted (dashed) route per candidate
   const vts = m.vessel_tracks || {};
   const vesselLayers = [];
   const layerByMmsi = {};
+  let anyPredicted = false;
   for (const c of cands) {
     const mmsi = String(c.identity.mmsi);
     const view = vts[mmsi];
     if (!view || !view.pings?.length) continue;
+    const predictedPath = c.components?.route_deviation?.detail?.predicted_path || [];
+    if (predictedPath.length > 1) anyPredicted = true;
     const lyr = vesselTrackLayer(map, view, {
       prime: c.rank === 1,
+      predictedPath,
+      observedGroup: gObserved,
+      predictedGroup: gPredicted,
+      markerGroup: gPositions,
       onClick: () => selectVessel(mmsi),
     });
     lyr.view = view;
+    lyr.score = c.score;
+    lyr.assessment = c.assessment;
     vesselLayers.push(lyr);
     layerByMmsi[mmsi] = lyr;
     layers.push(lyr.group);
@@ -609,12 +655,22 @@ async function workstation(ctx, params) {
 
   function selectVessel(mmsi, { pan = true, scroll = true } = {}) {
     $$("#ws-cands .cand").forEach((el) => el.classList.toggle("sel", el.dataset.mmsi === mmsi));
-    for (const [mm, lyr] of Object.entries(layerByMmsi)) lyr.setSelected?.(mm === mmsi);
+    for (const [mm, lyr] of Object.entries(layerByMmsi)) {
+      const on = mm === mmsi;
+      lyr.setSelected?.(on);
+      lyr.setFaded?.(!on && mmsi != null);          // fade the vessels that aren't selected
+    }
     const lyr = layerByMmsi[mmsi];
     if (lyr?.view) {
       const box = $("#ws-vessel");
-      if (box) { box.hidden = false; box.innerHTML = vesselPopupHtml(lyr.view); }
-      if (pan) { try { map.panInside(lyr.group.getBounds().getCenter(), { padding: [40, 40] }); } catch {} }
+      if (box) { box.hidden = false; box.innerHTML = routeEvidencePanel(lyr); }
+      if (lyr.endMarker) {
+        lyr.endMarker.bindPopup(
+          `<b>${h(lyr.view.name || "Vessel")}</b> <span class="mono">${h(lyr.view.mmsi || "")}</span>`
+          + `<br><b>score ${num(lyr.score, 1)} / 100</b> — ${h((lyr.assessment || "").replace(/_/g, " "))}`);
+        try { lyr.endMarker.openPopup(); } catch {}
+      }
+      if (pan) { try { map.panInside(lyr.endMarker.getLatLng(), { padding: [50, 50] }); } catch {} }
     }
     if (scroll) {
       const card = $(`#ws-cands .cand[data-mmsi="${mmsi}"]`);
@@ -624,28 +680,43 @@ async function workstation(ctx, params) {
   $$("#ws-cands .cand").forEach((el) =>
     el.addEventListener("click", () => selectVessel(el.dataset.mmsi)));
 
-  mapLegend(map, ["anom-hi", "origin", "track-prime", "track-other", "loiter", "blackout",
-    ...(beachLayer ? ["beach"] : [])]);
-  $("#ws-map-note").textContent = `${vesselLayers.length} track(s)`;
+  overlayControl(map, {
+    "Observed routes": gObserved,
+    "Predicted routes": gPredicted,
+    "Reconstructed drift": gRecon,
+    "Vessel positions": gPositions,
+    "Spill & shoreline": gSpill,
+    "Drift cloud": gDrift,
+    "Release origin": gOrigin,
+    "Jurisdiction": gJur,
+  });
+  mapLegend(map, [
+    "anom-hi", "route-observed",
+    ...(anyPredicted ? ["route-predicted"] : []),
+    ...(reconLine ? ["route-reconstructed"] : []),
+    "track-prime", "loiter", "blackout", "origin",
+    ...(beachLayer ? ["beach"] : []),
+  ]);
+  $("#ws-map-note").textContent = `${vesselLayers.length} track(s)`
+    + (anyPredicted ? " · predicted route shown" : "");
 
-  const frames = m.drift_frames || { hindcast: [], forecast: [] };
-  let driftLayer = null;
   function showFrame(t) {
-    if (driftLayer) { map.removeLayer(driftLayer); driftLayer = null; }
+    gDrift.clearLayers();
     for (const lyr of vesselLayers) lyr.positionAt(t);
     const pool = t <= 0 ? frames.hindcast : frames.forecast;
     if (pool && pool.length) {
       let best = pool[0];
       for (const f of pool) if (Math.abs(Math.abs(f.t_h) - Math.abs(t)) < Math.abs(Math.abs(best.t_h) - Math.abs(t))) best = f;
-      const pts = (best.points || []).map((p) => [p[0], p[1]]);
-      driftLayer = L.layerGroup(pts.map((p) => L.circleMarker(p, {
-        radius: 2, color: t <= 0 ? "#f0b429" : "#2ea6ff", weight: 0, fillOpacity: 0.5,
-      }))).addTo(map);
+      for (const p of (best.points || [])) {
+        L.circleMarker([p[0], p[1]], {
+          radius: 2, color: t <= 0 ? "#f0b429" : "#2ea6ff", weight: 0, fillOpacity: 0.5,
+        }).addTo(gDrift);
+      }
     }
     $("#ws-tl-now").textContent = t === 0 ? "observation (T0)" : `T${t > 0 ? "+" : ""}${t} h (${t < 0 ? "hindcast" : "forecast"})`;
   }
   $("#ws-tl").addEventListener("input", (e) => showFrame(Number(e.target.value)));
-  if (layers.length) fit(map, layers);
+  fit(map, [...layers, gObserved, gSpill, gOrigin, gPredicted]);
   showFrame(0);
   if (cands[0]) selectVessel(String(cands[0].identity.mmsi), { pan: false, scroll: false });
 }
@@ -653,9 +724,9 @@ async function workstation(ctx, params) {
 /* Draw the maritime-zone polygon(s) for this investigation as a subtle outline.
    Best-effort: needs /jurisdictions?with_geometry=true; any failure is ignored. */
 let _zoneGeoCache = null;
-async function drawJurisdictionBounds(map, juris) {
+async function drawJurisdictionBounds(target, juris) {
   // draw just the most-specific (primary) zone — the region/nation would swamp the map
-  const code = juris.primary_code || (juris.chain_codes || [])[0];
+  const code = juris && (juris.primary_code || (juris.chain_codes || [])[0]);
   if (!code) return;
   if (!_zoneGeoCache) _zoneGeoCache = await api.jurisdictions({ with_geometry: true });
   const z = (_zoneGeoCache || []).find((x) => String(x.code) === String(code));
@@ -664,7 +735,7 @@ async function drawJurisdictionBounds(map, juris) {
   L.geoJSON(geo, {
     style: { color: "#7aa7d6", weight: 1, opacity: 0.6, fill: false, dashArray: "6 5" },
     interactive: false,
-  }).addTo(map);
+  }).addTo(target);
 }
 function guessLonLat(ring) {
   // GeoJSON rings are [lon,lat]; if the first coord's |x|>90 it's a longitude
@@ -691,7 +762,7 @@ async function vesselIntel(ctx) {
     const sm = inv.summary_metrics || {};
     const cands = sm.attribution?.candidates || [];
     const vts = sm.vessel_tracks || {};
-    setHTML("#vi-body", cands.map((c) => {
+    const cardsHtml = cands.map((c) => {
       const cc = c.components || {};
       const ae = cc.ais_anomaly?.detail || {};
       const rd = cc.route_deviation?.detail || {};
@@ -699,7 +770,7 @@ async function vesselIntel(ctx) {
       const st = cc.spatiotemporal?.detail || {};
       const tv = vts[String(c.identity.mmsi)] || {};
       const tvm = tv.metrics || {};
-      return `<div class="panel"><h2>#${c.rank} ${h(c.identity.name)} <span class="muted mono">MMSI ${h(c.identity.mmsi)}</span></h2>
+      return `<div class="panel vi-card" data-mmsi="${h(c.identity.mmsi)}"><h2>#${c.rank} ${h(c.identity.name)} <span class="muted mono">MMSI ${h(c.identity.mmsi)}</span></h2>
         <p class="muted">Track: ${tvm.n_points ?? "-"} pings over ${num(tvm.duration_h, 1)} h ·
           ${num(tvm.sog_min_kn, 1)}–${num(tvm.sog_max_kn, 1)} kn ·
           heading ${tvm.mean_heading_deg != null ? num(tvm.mean_heading_deg, 0) + "°" : "-"} ·
@@ -727,7 +798,38 @@ async function vesselIntel(ctx) {
         <div class="finding">${h(st.finding || "")}</div>
         <div class="finding">${h(c.assessment || "")} - fused score ${num(c.score, 1)}/100</div>
       </div>`;
-    }).join("") || emptyState("ship", "No candidates for this investigation"));
+    }).join("");
+    if (!cands.length) { setHTML("#vi-body", emptyState("ship", "No candidates for this investigation")); return; }
+    setHTML("#vi-body",
+      `<div class="panel"><h2>Route map <span class="h2-note">observed vs LSTM-predicted</span></h2>
+         <div id="vi-map" class="map sm"></div></div>${cardsHtml}`);
+
+    // --- route map: observed (solid) + predicted (dashed) per candidate ---
+    const map = makeMap($("#vi-map"), inv.centroid_lat ? { center: [inv.centroid_lat, inv.centroid_lon], zoom: 8 } : {});
+    const gObs = L.featureGroup().addTo(map);
+    const gPred = L.featureGroup().addTo(map);
+    const byMmsi = {};
+    let anyPred = false;
+    for (const c of cands) {
+      const mmsi = String(c.identity.mmsi);
+      const view = vts[mmsi];
+      if (!view?.pings?.length) continue;
+      const pp = c.components?.route_deviation?.detail?.predicted_path || [];
+      if (pp.length > 1) anyPred = true;
+      byMmsi[mmsi] = vesselTrackLayer(map, view, {
+        prime: c.rank === 1, predictedPath: pp,
+        observedGroup: gObs, predictedGroup: gPred,
+        onClick: () => highlight(mmsi),
+      });
+    }
+    function highlight(mmsi) {
+      $$("#vi-body .vi-card").forEach((el) => el.classList.toggle("sel", el.dataset.mmsi === mmsi));
+      for (const [mm, lyr] of Object.entries(byMmsi)) { lyr.setSelected?.(mm === mmsi); lyr.setFaded?.(mm !== mmsi); }
+    }
+    $$("#vi-body .vi-card").forEach((el) => el.addEventListener("click", () => highlight(el.dataset.mmsi)));
+    mapLegend(map, ["route-observed", ...(anyPred ? ["route-predicted"] : []), "track-prime", "track-other"]);
+    fit(map, [gObs, gPred]);
+    if (cands[0]) highlight(String(cands[0].identity.mmsi));
    } catch (e) {
      if (!ctx.stale()) setHTML("#vi-body", errorState(e));
    }
