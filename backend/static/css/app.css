@@ -309,6 +309,58 @@ code {
 .scen-group .scen-btn { margin: 0 0 .3rem; text-align: left; }
 .scen-btn { display: inline-block; }
 
+/* ---- provenance badges (always crisp — never blurred) --------------- */
+.prov {
+  display: inline-block; vertical-align: middle;
+  font-size: .58rem; font-weight: 800; letter-spacing: .06em;
+  text-transform: uppercase; padding: .12rem .42rem; border-radius: 4px;
+  border: 1px solid transparent; white-space: nowrap; line-height: 1.3;
+}
+.prov-ok   { background: color-mix(in srgb, var(--ok) 18%, var(--panel));   color: var(--ok);       border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.prov-warn { background: color-mix(in srgb, var(--warn) 20%, var(--panel)); color: var(--warn);     border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.prov-hot  { background: color-mix(in srgb, var(--danger-2) 18%, var(--panel)); color: var(--danger-2); border-color: color-mix(in srgb, var(--danger-2) 45%, transparent); }
+.prov-info { background: color-mix(in srgb, var(--info) 16%, var(--panel));  color: var(--info);     border-color: color-mix(in srgb, var(--info) 45%, transparent); }
+.prov-mut  { background: var(--panel-3); color: var(--muted); border-color: var(--line-2); }
+.prov-line { font-size: .8rem; color: var(--muted); margin: 0 0 .9rem; display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+.cand-prov { margin-top: .3rem; }
+
+/* ---- investigation timeline: events on T-48h .. +48h --------------- */
+.tl-track {
+  position: relative; height: 46px; margin: .2rem 0 .1rem;
+  border-radius: var(--r-sm);
+}
+.tl-track .tl-axis {
+  position: absolute; left: 0; right: 0; top: 30px; height: 2px;
+  background: var(--line-2); border-radius: 2px;
+}
+.tl-seg {
+  position: absolute; top: 22px; height: 16px; border-radius: 4px;
+  border: 1px solid transparent; overflow: hidden; min-width: 3px;
+}
+.tl-seg > span {
+  font-size: .58rem; font-weight: 700; letter-spacing: .03em;
+  padding: 0 .3rem; line-height: 16px; white-space: nowrap; color: var(--text);
+  opacity: .85;
+}
+.tl-seg.tl-ais { background: color-mix(in srgb, var(--info) 26%, transparent); border-color: color-mix(in srgb, var(--info) 50%, transparent); }
+.tl-seg.tl-rw  { background: color-mix(in srgb, var(--warn) 30%, transparent); border-color: color-mix(in srgb, var(--warn) 55%, transparent); }
+.tl-tick {
+  position: absolute; top: 8px; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  background: none; border: none; cursor: pointer; padding: 0; color: var(--muted);
+}
+.tl-tick::after {
+  content: ""; width: 2px; height: 20px; background: var(--faint); border-radius: 2px;
+}
+.tl-tick > span {
+  font-size: .58rem; font-weight: 700; white-space: nowrap;
+}
+.tl-tick.tl-detect { color: var(--danger); }
+.tl-tick.tl-detect::after { background: var(--danger); height: 24px; }
+.tl-tick.tl-fc { color: var(--info); }
+.tl-tick.tl-fc::after { background: var(--info); }
+.tl-tick:hover > span { color: var(--text); }
+
 /* ---- badges ------------------------------------------------ */
 .badge {
   display: inline-block; padding: .12rem .5rem; border-radius: 999px;

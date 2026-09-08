@@ -1,12 +1,12 @@
 /* All screens for the Operations Console. Each view renders into ctx.root and
    wires its own events. ctx = { user, root, go, toast }. */
 
-import { api, fetchText } from "./api.js?v=ui12";
+import { api, fetchText } from "./api.js?v=ui14";
 import {
   makeMap, anomalyMarker, vesselMarker, trackLine, polygon, fit, L,
   vesselTrackLayer, vesselPopupHtml, shorelineContact, mapLegend,
   reconstructedDriftLine, overlayControl, clusterGroup,
-} from "./map.js?v=ui12";
+} from "./map.js?v=ui14";
 
 /* -------------------------------------------------------------- helpers -- */
 const h = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -139,6 +139,49 @@ function assessmentBadge(band) {
   return `<span class="band band-${BAND_TONE[key] || "mut"}">${h(BAND_LABEL[key] || band || "—")}</span>`;
 }
 
+/* ---- provenance badges: never leave the data source ambiguous ----------- */
+const PROV = {
+  live:          ["LIVE", "ok", "From an operator-supplied scene or AIS upload"],
+  synthetic:     ["SYNTHETIC DEMO", "warn", "Deterministic demo scenario — realistic patterns, not a live feed"],
+  simulated:     ["SIMULATED", "mut", "Deterministic simulated model field, not a live feed"],
+  "historical-ais": ["HISTORICAL AIS", "info", "Recorded AIS positions received from the vessel"],
+  model:         ["MODEL PREDICTION", "hot", "Model-estimated — not directly observed"],
+  reconstructed: ["RECONSTRUCTED", "info", "Inferred by the physics engine from the observed slick"],
+};
+function provBadge(kind) {
+  const [label, tone, title] = PROV[kind] || [String(kind).toUpperCase(), "mut", ""];
+  return `<span class="prov prov-${tone}" title="${h(title)}">${h(label)}</span>`;
+}
+/* SYNTHETIC DEMO for a scenario-run investigation, LIVE for an uploaded scene */
+function sceneProv(m) {
+  return (m && m.scenario && m.scenario.key) ? "synthetic" : "live";
+}
+
+/* ---- investigation timeline: events mapped onto T-48h .. +48h ----------- */
+function investigationTimeline(m, vts) {
+  const MIN = -48, MAX = 48, SPAN = MAX - MIN;
+  const clampPct = (t) => ((Math.max(MIN, Math.min(MAX, t)) - MIN) / SPAN) * 100;
+  const seens = Object.values(vts || {})
+    .map((v) => v?.metrics?.first_seen_h).filter((x) => Number.isFinite(x));
+  const aisStart = seens.length ? Math.min(...seens) : -12;
+  const rw = m.hindcast?.release_window_h;
+  const horizons = (m.forecast?.horizons || [])
+    .map((z) => z.horizon_h ?? z.t_h).filter((v) => v != null).sort((a, b) => a - b);
+
+  const seg = (a, b, cls, label) =>
+    `<div class="tl-seg ${cls}" style="left:${clampPct(a)}%;width:${clampPct(b) - clampPct(a)}%" title="${h(label)}"><span>${h(label)}</span></div>`;
+  const tick = (t, cls, label) =>
+    `<button class="tl-tick ${cls}" style="left:${clampPct(t)}%" data-t="${t}" title="${h(label)} · jump the slider here"><span>${h(label)}</span></button>`;
+
+  return `<div class="tl-track" id="ws-tl-track">
+    ${seens.length ? seg(aisStart, 0, "tl-ais", "Historical AIS") : ""}
+    ${Array.isArray(rw) && rw.length === 2 ? seg(rw[0], rw[1], "tl-rw", "Release window") : ""}
+    <div class="tl-axis"></div>
+    ${tick(0, "tl-detect", "Detection / now")}
+    ${horizons.map((z) => tick(z, "tl-fc", `+${Math.round(z)}h`)).join("")}
+  </div>`;
+}
+
 /* compact explanation of the selected vessel's three route layers */
 function routeEvidencePanel(lyr) {
   const v = lyr.view || {};
@@ -189,6 +232,7 @@ function candidateCard(c, truthMmsi) {
       <div class="cand-id">
         <div class="cand-name">#${c.rank ?? "-"} ${h(id.name || "Unknown vessel")}</div>
         <div class="cand-meta mono">MMSI ${h(id.mmsi)} &middot; ${h(id.vessel_type || "type ?")}${id.flag ? " &middot; " + h(id.flag) : ""}</div>
+        <div class="cand-prov">${provBadge("historical-ais")}</div>
       </div>
       <div class="cand-score"><b>${num(c.score, 1)}</b><span>/ 100</span></div>
     </div>
@@ -473,11 +517,13 @@ async function workstation(ctx, params) {
   let inv;
   try { inv = await api.investigation(id); }
   catch (e) {
+    if (ctx.stale()) return;
     ctx.root.innerHTML = page("Investigation", null, e.status === 403
       ? emptyState("alert", "Outside your jurisdiction", "This case sits in a maritime zone you're not assigned to.")
       : errorState(e));
     return;
   }
+  if (ctx.stale()) return;   // user navigated away while the case loaded
   const m = inv.summary_metrics || {};
   const sar = m.sar || {};
   const hind = m.hindcast || {};
@@ -497,6 +543,7 @@ async function workstation(ctx, params) {
     `<div class="row ws-actions">
       ${statusBadge(inv.status)} ${confBadge(sar.confidence)}
       <span class="badge ${clsTone === "crit" ? "crit" : clsTone === "warn" ? "warn" : "info"}">${h(cls)}</span>
+      ${provBadge(sceneProv(m))}
       ${m.iou ? `<span class="badge info" title="vs operator ground-truth mask">IoU ${num(m.iou.value, 3)}</span>` : ""}
       <span class="spacer"></span>
       <label class="btn btn-sm" style="cursor:pointer">Ingest AIS CSV
@@ -507,7 +554,7 @@ async function workstation(ctx, params) {
     <div class="workstation">
       <div class="wcol ws-left">
         <div class="panel">
-          <h2>Anomaly</h2>
+          <h2>Anomaly ${provBadge(sceneProv(m))}</h2>
           <div class="anom-head">
             <span class="cls-chip t-${clsTone}">${h(cls)}</span>
             <span class="cls-conf">${sar.confidence != null ? pct(sar.confidence) : "n/a"} <small>confidence</small></span>
@@ -521,14 +568,14 @@ async function workstation(ctx, params) {
             ...(m.iou ? [["IoU vs ground truth", num(m.iou.value, 3)]] : []),
           ])}
         </div>
-        <div class="panel"><h2>Reconstructed origin</h2>${kv([
+        <div class="panel"><h2>Reconstructed origin ${provBadge("reconstructed")}</h2>${kv([
           ["Best estimate", `<span class="mono">${(hind.best_estimate || []).map((v) => num(v, 3)).join(", ") || "&mdash;"}</span>`],
           ["Uncertainty radius", `${num(hind.uncertainty_radius_km, 1)} km`],
           ["Release window", (hind.release_window_h || []).map((v) => `T${v >= 0 ? "+" : ""}${num(v, 1)}h`).join(" .. ") || "&mdash;"],
           ["Age estimate", `${num(hind.age_point_estimate_h, 1)} h (${h(hind.age_source || "-")})`],
           ["Feedback loop", m.feedback_loop?.converged ? `converged in ${m.feedback_loop.n_iterations} iter` : `${m.feedback_loop?.n_iterations ?? "-"} iter`],
         ])}</div>
-        <div class="panel"><h2>Forward forecast &amp; shoreline</h2>${
+        <div class="panel"><h2>Forward forecast &amp; shoreline ${provBadge("model")}</h2>${
           (fore.horizons || []).length
             ? `<table class="data"><thead><tr><th>Horizon</th><th>Centroid</th><th>Radius</th><th>Beached</th></tr></thead><tbody>${
               fore.horizons.map((hz) => `<tr><td>+${h(hz.horizon_h ?? hz.t_h)}h</td>
@@ -544,7 +591,8 @@ async function workstation(ctx, params) {
                 ["Contact point", `<span class="mono">${num((ci.first_contact_point || [])[0], 3)}, ${num((ci.first_contact_point || [])[1], 3)}</span>`],
                 ["Oil ashore (48 h)", pct(ci.fraction_beached)],
               ])}`
-        }<p class="muted" style="margin-top:.6rem">${h(m.environmental_field?.label || "")}</p></div>
+        }<p class="muted" style="margin-top:.6rem">${provBadge("simulated")}
+          ${h(typeof m.environmental_field === "string" ? m.environmental_field : (m.environmental_field?.label || "Simulated met-ocean field"))}</p></div>
       </div>
 
       <div class="wcol ws-center">
@@ -552,6 +600,7 @@ async function workstation(ctx, params) {
           <h2>Investigation map <span class="h2-note" id="ws-map-note"></span></h2>
           <div id="ws-map" class="map"></div>
           <div class="timeline">
+            ${investigationTimeline(m, m.vessel_tracks || {})}
             <div class="tl-label"><span>T&minus;48h</span><span id="ws-tl-now">observation (T0)</span><span>T+48h</span></div>
             <input type="range" id="ws-tl" min="-48" max="48" value="0" step="1">
           </div>
@@ -716,6 +765,10 @@ async function workstation(ctx, params) {
     $("#ws-tl-now").textContent = t === 0 ? "observation (T0)" : `T${t > 0 ? "+" : ""}${t} h (${t < 0 ? "hindcast" : "forecast"})`;
   }
   $("#ws-tl").addEventListener("input", (e) => showFrame(Number(e.target.value)));
+  $$("#ws-tl-track .tl-tick").forEach((b) => b.addEventListener("click", () => {
+    const t = Math.round(Number(b.dataset.t));
+    const sl = $("#ws-tl"); sl.value = t; showFrame(t);
+  }));
   fit(map, [...layers, gObserved, gSpill, gOrigin, gPredicted]);
   showFrame(0);
   if (cands[0]) selectVessel(String(cands[0].identity.mmsi), { pan: false, scroll: false });
@@ -770,7 +823,7 @@ async function vesselIntel(ctx) {
       const st = cc.spatiotemporal?.detail || {};
       const tv = vts[String(c.identity.mmsi)] || {};
       const tvm = tv.metrics || {};
-      return `<div class="panel vi-card" data-mmsi="${h(c.identity.mmsi)}"><h2>#${c.rank} ${h(c.identity.name)} <span class="muted mono">MMSI ${h(c.identity.mmsi)}</span></h2>
+      return `<div class="panel vi-card" data-mmsi="${h(c.identity.mmsi)}"><h2>#${c.rank} ${h(c.identity.name)} <span class="muted mono">MMSI ${h(c.identity.mmsi)}</span> ${provBadge("historical-ais")}</h2>
         <p class="muted">Track: ${tvm.n_points ?? "-"} pings over ${num(tvm.duration_h, 1)} h ·
           ${num(tvm.sog_min_kn, 1)}–${num(tvm.sog_max_kn, 1)} kn ·
           heading ${tvm.mean_heading_deg != null ? num(tvm.mean_heading_deg, 0) + "°" : "-"} ·
@@ -783,7 +836,7 @@ async function vesselIntel(ctx) {
             ["Flagged pings", ae.flagged_pings ?? "-"],
             ["Score", num(cc.ais_anomaly?.value, 3)],
           ])}<p class="finding">${h(ae.finding || "")}</p></div>
-          <div><h3>LSTM trajectory</h3>${kv([
+          <div><h3>LSTM trajectory ${provBadge("model")}</h3>${kv([
             ["Usable", rd.usable ? "yes" : "no"],
             ["Score", num(cc.route_deviation?.value, 3)],
           ])}<p class="finding">${h(rd.finding || "")}</p></div>
@@ -860,6 +913,9 @@ async function spillAnalysis(ctx, params) {
     const wxLast = (wx.series || []).slice(-1)[0] || {};
     const iou = sm.iou;
     setHTML("#sa-body", `
+      <p class="prov-line">Scene source: ${provBadge(sceneProv(sm))}
+        ${sceneProv(sm) === "synthetic" ? "synthetic SAR scene from a demo scenario" : "operator-supplied SAR scene"}
+        &middot; met-ocean ${provBadge("simulated")}</p>
       <div class="kpis">
         ${kpi(h(sar.scene_classification || "-"), "Scene verdict")}
         ${kpi(pct(sar.confidence), "Confidence")}
@@ -938,14 +994,14 @@ async function driftForecast(ctx, params) {
     setHTML("#df-body", `
       <div class="panel"><h2>Trajectories</h2><div id="df-map" class="map"></div></div>
       <div class="grid cols-2">
-        <div class="panel"><h2>Hindcast (origin reconstruction)</h2>${kv([
+        <div class="panel"><h2>Hindcast (origin reconstruction) ${provBadge("reconstructed")}</h2>${kv([
           ["Best estimate", `<span class="mono">${(hind.best_estimate || []).map((v) => num(v, 4)).join(", ")}</span>`],
           ["Uncertainty radius", `${num(hind.uncertainty_radius_km, 1)} km`],
           ["Release window", (hind.release_window_h || []).map((v) => `T${v >= 0 ? "+" : ""}${num(v, 1)}h`).join(" .. ")],
           ["Particles", hind.n_particles],
           ["Seed", h(hind.seed_kind || "-")],
         ])}</div>
-        <div class="panel"><h2>Forecast horizons</h2>${
+        <div class="panel"><h2>Forecast horizons ${provBadge("model")}</h2>${
           (fore.horizons || []).length ? `<table class="data"><thead><tr><th>+h</th><th>Centroid</th><th>Mean radius</th><th>Beached</th></tr></thead><tbody>${
             fore.horizons.map((hz) => `<tr><td>${h(hz.horizon_h ?? hz.t_h)}</td>
               <td class="mono">${num(hz.centroid?.[0], 3)}, ${num(hz.centroid?.[1], 3)}</td>
@@ -966,7 +1022,7 @@ async function driftForecast(ctx, params) {
           return kv(rows);
         })()}</div>
       </div>
-      <div class="panel"><h2>Met-ocean field</h2><p class="muted">${h(m.environmental_field?.label || "")}</p>${kv([
+      <div class="panel"><h2>Met-ocean field ${provBadge("simulated")}</h2><p class="muted">${h(typeof m.environmental_field === "string" ? m.environmental_field : (m.environmental_field?.label || "Simulated met-ocean field"))}</p>${kv([
         ["Mean current", `${num(mo.current_speed_ms ?? mo.current_ms, 2)} m/s @ ${num(mo.current_dir_deg, 0)}&deg;`],
         ["Mean wind", `${num(mo.wind_speed_ms ?? mo.wind_ms, 1)} m/s @ ${num(mo.wind_dir_deg, 0)}&deg;`],
         ["Wave height", `${num(mo.wave_height_m, 2)} m`],
@@ -1039,6 +1095,7 @@ async function evidence(ctx, params) {
       <div><span class="rm-k">Reference</span><span class="rm-v mono">${h(inv.reference || "-")}</span></div>
       <div><span class="rm-k">Status</span><span class="rm-v">${statusBadge(inv.status || "-")}</span></div>
       <div><span class="rm-k">Scene</span><span class="rm-v">${h(sm.sar?.scene_classification || "-")}</span></div>
+      <div><span class="rm-k">Data source</span><span class="rm-v">${provBadge(sceneProv(sm))}</span></div>
       <div><span class="rm-k">Prime suspect</span><span class="rm-v">${h(ps || "—")}</span></div>
       <div><span class="rm-k">Opened</span><span class="rm-v">${when(inv.created_at)}</span></div>`);
   }
@@ -1138,7 +1195,7 @@ async function alerts(ctx) {
         <div class="ar-msg">${h((a.message || "").slice(0, 160))}</div>
         <div class="ar-foot muted">
           ${a.triggered_by_confidence != null ? `trigger ${pct(a.triggered_by_confidence)} · ` : ""}
-          via ${h(a.provider || "—")} · attempt ${a.attempts}
+          via ${h(a.provider || "—")}${/mock/i.test(a.provider || "") || a.status === "MOCKED" ? " " + provBadge("simulated") : ""} · attempt ${a.attempts}
           ${a.status === "FAILED" ? `<button class="btn btn-sm" data-retry="${a.id}">Retry</button>` : ""}
         </div>
         ${a.last_error ? `<div class="ar-err">${h(a.last_error)}</div>` : ""}
