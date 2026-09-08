@@ -5,27 +5,33 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OceanTrace - Operations Console</title>
 <link rel="stylesheet" href="vendor/leaflet.css">
-<link rel="stylesheet" href="css/app.css?v=epic3">
+<link rel="stylesheet" href="css/app.css?v=ui2">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%232ea6ff' stroke-width='2.5'/%3E%3Ccircle cx='16' cy='16' r='3.5' fill='%232ea6ff'/%3E%3C/svg%3E">
 </head>
 <body>
 <div id="app" hidden>
   <header class="topbar">
-    <div class="brand">
-      <span class="brand-mark"></span>
-      <span class="brand-name">OceanTrace</span>
-      <span class="brand-sub">Operations Console</span>
+    <div class="topbar-left">
+      <div class="brand">
+        <span class="brand-mark"></span>
+        <span class="brand-name">OceanTrace</span>
+      </div>
+      <span class="topbar-div" aria-hidden="true"></span>
+      <h1 id="view-title" class="view-title">Mission Control</h1>
     </div>
     <div class="topbar-right">
+      <span id="op-status" class="op-status" title="Unified API status">
+        <span class="op-dot"></span><span id="op-status-text">checking&hellip;</span>
+      </span>
       <span id="env-chip" class="chip"></span>
-      <button id="theme-toggle" class="icon-btn" title="Toggle light / dark">&#9681;</button>
+      <button id="theme-toggle" class="icon-btn" title="Toggle light / dark" aria-label="Toggle light or dark theme">&#9680;</button>
       <div id="user-chip" class="user-chip"></div>
-      <button id="logout-btn" class="btn btn-ghost">Sign out</button>
+      <button id="logout-btn" class="btn btn-ghost btn-sm">Sign out</button>
     </div>
   </header>
   <div class="body">
-    <nav id="nav" class="sidenav"></nav>
-    <main id="view" class="view"></main>
+    <nav id="nav" class="sidenav" aria-label="Primary navigation"></nav>
+    <main id="view" class="view" tabindex="-1"></main>
   </div>
 </div>
 
@@ -67,6 +73,6 @@
 <div id="toast" class="toast" hidden></div>
 
 <script src="vendor/leaflet.js"></script>
-<script type="module" src="js/app.js?v=epic3"></script>
+<script type="module" src="js/app.js?v=ui2"></script>
 </body>
 </html>

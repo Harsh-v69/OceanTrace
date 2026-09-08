@@ -25,9 +25,6 @@ export function makeMap(el, opts = {}) {
   });
 
   const dark = document.documentElement.getAttribute("data-theme") !== "light";
-  const url = dark
-    ? "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png" // never used, placeholder
-    : "";
 
   const tiles = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 12, minZoom: 3, crossOrigin: true,

@@ -1,11 +1,11 @@
 /* All screens for the Operations Console. Each view renders into ctx.root and
    wires its own events. ctx = { user, root, go, toast }. */
 
-import { api, fetchText } from "./api.js?v=epic3";
+import { api, fetchText } from "./api.js?v=ui2";
 import {
   makeMap, anomalyMarker, vesselMarker, trackLine, polygon, fit, L,
   vesselTrackLayer, vesselPopupHtml, shorelineContact,
-} from "./map.js?v=epic3";
+} from "./map.js?v=ui2";
 
 /* -------------------------------------------------------------- helpers -- */
 const h = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -984,18 +984,20 @@ export const views = {
   "profile": profile,
 };
 
+export const NAV_GROUPS = ["Operations", "Intelligence", "System"];
+
 export const NAV = [
-  { id: "mission-control", label: "Mission Control", min: "PILOT" },
-  { id: "monitoring", label: "Live Monitoring", min: "PILOT" },
-  { id: "investigations", label: "Investigations", min: "PILOT" },
+  { id: "mission-control", label: "Mission Control", min: "PILOT", group: "Operations", icon: "radar" },
+  { id: "monitoring", label: "Live Monitoring", min: "PILOT", group: "Operations", icon: "activity" },
+  { id: "investigations", label: "Investigations", min: "PILOT", group: "Operations", icon: "folder" },
   { id: "workstation", label: "Investigation Workstation", min: "PILOT", hideInNav: true },
-  { id: "vessels", label: "Vessel Intelligence", min: "PILOT" },
-  { id: "spill", label: "Spill Analysis", min: "PILOT" },
-  { id: "drift", label: "Drift & Forecast", min: "PILOT" },
-  { id: "evidence", label: "Evidence", min: "PILOT" },
-  { id: "alerts", label: "Alerts", min: "REGIONAL" },
-  { id: "analytics", label: "Analytics", min: "REGIONAL" },
-  { id: "users", label: "User Management", min: "REGIONAL" },
-  { id: "system", label: "System", min: "PILOT" },
-  { id: "profile", label: "Profile", min: "PILOT" },
+  { id: "vessels", label: "Vessel Intelligence", min: "PILOT", group: "Intelligence", icon: "ship" },
+  { id: "spill", label: "Spill Analysis", min: "PILOT", group: "Intelligence", icon: "droplet" },
+  { id: "drift", label: "Drift & Forecast", min: "PILOT", group: "Intelligence", icon: "wind" },
+  { id: "evidence", label: "Evidence", min: "PILOT", group: "Intelligence", icon: "file" },
+  { id: "alerts", label: "Alerts", min: "REGIONAL", group: "System", icon: "bell" },
+  { id: "analytics", label: "Analytics", min: "REGIONAL", group: "System", icon: "chart" },
+  { id: "users", label: "User Management", min: "REGIONAL", group: "System", icon: "users" },
+  { id: "system", label: "System", min: "PILOT", group: "System", icon: "server" },
+  { id: "profile", label: "Profile", min: "PILOT", group: "System", icon: "user" },
 ];
