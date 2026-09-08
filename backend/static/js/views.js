@@ -1,11 +1,11 @@
 /* All screens for the Operations Console. Each view renders into ctx.root and
    wires its own events. ctx = { user, root, go, toast }. */
 
-import { api, fetchText } from "./api.js?v=ui7";
+import { api, fetchText } from "./api.js?v=ui8";
 import {
   makeMap, anomalyMarker, vesselMarker, trackLine, polygon, fit, L,
   vesselTrackLayer, vesselPopupHtml, shorelineContact, mapLegend,
-} from "./map.js?v=ui7";
+} from "./map.js?v=ui8";
 
 /* -------------------------------------------------------------- helpers -- */
 const h = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -53,6 +53,42 @@ function raw(obj) {
 }
 async function loadInvestigations() {
   try { return await api.investigations(); } catch { return []; }
+}
+
+/* -------- shared state blocks: empty / loading / error -------------------- */
+const STATE_ICONS = {
+  inbox: '<path d="M3 13h4l2 3h6l2-3h4M5 5h14l2 8v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5z"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+  alert: '<path d="M12 3 2 20h20z"/><path d="M12 9v5M12 17h.01"/>',
+  ship: '<path d="M3 14l1.6 5.2a2 2 0 0 0 1.9 1.4h11a2 2 0 0 0 1.9-1.4L23 14M5 14V8a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v6M12 3v3"/>',
+  bell: '<path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+  route: '<circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 17.5 16 7"/>',
+};
+function svgIcon(k) {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${STATE_ICONS[k] || STATE_ICONS.inbox}</svg>`;
+}
+function emptyState(iconKey, title, msg = "") {
+  return `<div class="state"><div class="state-icon">${svgIcon(iconKey)}</div>
+    <h3>${h(title)}</h3>${msg ? `<p>${h(msg)}</p>` : ""}</div>`;
+}
+function errorState(err) {
+  const msg = Array.isArray(err?.detail) ? err.detail.map((d) => d.msg).join("; ")
+    : (err?.detail || err?.message || String(err || "Unexpected error"));
+  return `<div class="state"><div class="state-icon">${svgIcon("alert")}</div>
+    <h3>Couldn't load this</h3><p>${h(msg)}</p></div>`;
+}
+const spinnerRow = (label = "Loading") => `<div class="loading-row"><span class="spin"></span> ${h(label)}&hellip;</div>`;
+function skeleton(rows = 3) {
+  return `<div class="sk-wrap">${
+    `<div class="sk sk-line"></div>`.repeat(Math.max(1, rows))
+  }</div>`;
+}
+/* guarded innerHTML - no-op if the container was removed by navigation */
+function setHTML(sel, html) {
+  const el = typeof sel === "string" ? $(sel) : sel;
+  if (el) el.innerHTML = html;
+  return !!el;
 }
 
 /* the 8 unified-fusion components, in display order, with UI labels.
@@ -259,7 +295,7 @@ async function missionControl(ctx) {
       <td class="mono">${h(i.reference)}</td><td>${h(i.title)}</td>
       <td>${statusBadge(i.status)}</td><td>${confBadge(i.summary_metrics?.sar?.confidence)}</td>
       <td>${when(i.created_at)}</td></tr>`).join("")}</tbody></table>`
-    : `<p class="empty">No investigations yet - run a scenario.</p>`;
+    : emptyState("inbox", "No investigations yet", "Run a demo scenario or upload a scene to begin.");
   $$("#mc-recent tr.clickable").forEach((r) => r.addEventListener("click", () => ctx.go(`#/workstation/${r.dataset.id}`)));
 }
 
@@ -366,7 +402,7 @@ async function investigations(ctx) {
           <td>${statusBadge(i.status)}</td><td>${confBadge(i.summary_metrics?.sar?.confidence)}</td>
           <td>${h(ps || "-")}</td><td>${when(i.created_at)}</td></tr>`;
       }).join("")}</tbody></table></div>`
-      : `<p class="empty">No investigations yet.</p>`);
+      : emptyState("inbox", "No investigations yet", "Cases you can see appear here once a scenario or upload runs."));
   $$("#view tr.clickable").forEach((r) => r.addEventListener("click", () => ctx.go(`#/workstation/${r.dataset.id}`)));
 }
 
@@ -377,8 +413,9 @@ async function workstation(ctx, params) {
   let inv;
   try { inv = await api.investigation(id); }
   catch (e) {
-    ctx.root.innerHTML = page("Investigation", null,
-      `<p class="empty">${e.status === 403 ? "This case is outside your assigned jurisdiction." : h(e.message)}</p>`);
+    ctx.root.innerHTML = page("Investigation", null, e.status === 403
+      ? emptyState("alert", "Outside your jurisdiction", "This case sits in a maritime zone you're not assigned to.")
+      : errorState(e));
     return;
   }
   const m = inv.summary_metrics || {};
@@ -466,7 +503,7 @@ async function workstation(ctx, params) {
         <div class="panel">
           <h2>Ranked candidates <span class="h2-note">${cands.length || 0}</span></h2>
           <p class="muted" style="font-size:.8rem">${h(attr.summary?.verdict || "No attribution for this scene.")}</p>
-          <div id="ws-cands">${cands.map((c) => candidateCard(c, truth)).join("") || `<p class="empty">No vessels in the search window.</p>`}</div>
+          <div id="ws-cands">${cands.map((c) => candidateCard(c, truth)).join("") || emptyState("ship", "No candidates", "No vessels fell inside the space-time search window for this scene.")}</div>
         </div>
       </div>
     </div>
@@ -607,14 +644,17 @@ async function vesselIntel(ctx) {
     `<div class="panel"><div class="row"><label>Investigation
       <select id="vi-inv">${withAttr.map((i) => `<option value="${i.id}">${h(i.reference)} - ${h(i.title)}</option>`).join("")}</select>
     </label></div></div><div id="vi-body"></div>`);
-  if (!withAttr.length) { $("#vi-body").innerHTML = `<p class="empty">No attributed vessels yet.</p>`; return; }
+  if (!withAttr.length) { setHTML("#vi-body", emptyState("ship", "No attributed vessels yet", "Run a scenario with AIS traffic to see autoencoder and LSTM findings here.")); return; }
 
   async function render(id) {
+   setHTML("#vi-body", skeleton(4));
+   try {
     const inv = await api.investigation(id);
+    if (ctx.stale()) return;
     const sm = inv.summary_metrics || {};
     const cands = sm.attribution?.candidates || [];
     const vts = sm.vessel_tracks || {};
-    $("#vi-body").innerHTML = cands.map((c) => {
+    setHTML("#vi-body", cands.map((c) => {
       const cc = c.components || {};
       const ae = cc.ais_anomaly?.detail || {};
       const rd = cc.route_deviation?.detail || {};
@@ -650,7 +690,10 @@ async function vesselIntel(ctx) {
         <div class="finding">${h(st.finding || "")}</div>
         <div class="finding">${h(c.assessment || "")} - fused score ${num(c.score, 1)}/100</div>
       </div>`;
-    }).join("");
+    }).join("") || emptyState("ship", "No candidates for this investigation"));
+   } catch (e) {
+     if (!ctx.stale()) setHTML("#vi-body", errorState(e));
+   }
   }
   $("#vi-inv").addEventListener("change", (e) => render(e.target.value));
   render($("#vi-inv").value);
@@ -664,18 +707,20 @@ async function spillAnalysis(ctx, params) {
     `<div class="panel"><div class="row"><label>Investigation
       <select id="sa-inv">${invs.map((i) => `<option value="${i.id}" ${i.id == id ? "selected" : ""}>${h(i.reference)} - ${h(i.title)}</option>`).join("")}</select>
     </label></div></div><div id="sa-body"></div>`);
-  if (!invs.length) { $("#sa-body").innerHTML = `<p class="empty">No investigations.</p>`; return; }
+  if (!invs.length) { setHTML("#sa-body", emptyState("inbox", "No investigations yet", "Run a scenario from Mission Control to populate this view.")); return; }
 
   async function render(iid) {
+   setHTML("#sa-body", skeleton(5));
    try {
     const inv = await api.investigation(iid);
+    if (ctx.stale()) return;
     const sm = inv.summary_metrics || {};
     const sar = sm.sar || {};
     const dets = sar.detections || [];
     const wx = sm.weathering || {};
     const wxLast = (wx.series || []).slice(-1)[0] || {};
     const iou = sm.iou;
-    $("#sa-body").innerHTML = `
+    setHTML("#sa-body", `
       <div class="kpis">
         ${kpi(h(sar.scene_classification || "-"), "Scene verdict")}
         ${kpi(pct(sar.confidence), "Confidence")}
@@ -725,9 +770,9 @@ async function spillAnalysis(ctx, params) {
               ])}</div>`;
           }).join("") || `<p class="muted">No discrete detections (scene rejected).</p>`
         }</div>
-      </div>${raw(sar)}`;
+      </div>${raw(sar)}`);
    } catch (e) {
-     $("#sa-body").innerHTML = `<div class="panel"><p class="empty">Could not render this scene's analysis (${h(e.message || e)}).</p></div>`;
+     if (!ctx.stale()) setHTML("#sa-body", errorState(e));
    }
   }
   $("#sa-inv").addEventListener("change", (e) => render(e.target.value));
@@ -742,13 +787,16 @@ async function driftForecast(ctx, params) {
     `<div class="panel"><div class="row"><label>Investigation
       <select id="df-inv">${invs.map((i) => `<option value="${i.id}" ${i.id == id ? "selected" : ""}>${h(i.reference)} - ${h(i.title)}</option>`).join("")}</select>
     </label></div></div><div id="df-body"></div>`);
-  if (!invs.length) { $("#df-body").innerHTML = `<p class="empty">No drift runs yet (look-alike scenes have none).</p>`; return; }
+  if (!invs.length) { setHTML("#df-body", emptyState("route", "No drift runs yet", "Look-alike scenes carry no drift model. Run an oil-like scenario to populate this.")); return; }
 
   async function render(iid) {
+   setHTML("#df-body", skeleton(4));
+   try {
     const inv = await api.investigation(iid);
+    if (ctx.stale()) return;
     const m = inv.summary_metrics || {};
     const hind = m.hindcast || {}, fore = m.forecast || {}, mo = m.met_ocean || {};
-    $("#df-body").innerHTML = `
+    setHTML("#df-body", `
       <div class="panel"><h2>Trajectories</h2><div id="df-map" class="map"></div></div>
       <div class="grid cols-2">
         <div class="panel"><h2>Hindcast (origin reconstruction)</h2>${kv([
@@ -783,7 +831,8 @@ async function driftForecast(ctx, params) {
         ["Mean current", `${num(mo.current_speed_ms ?? mo.current_ms, 2)} m/s @ ${num(mo.current_dir_deg, 0)}&deg;`],
         ["Mean wind", `${num(mo.wind_speed_ms ?? mo.wind_ms, 1)} m/s @ ${num(mo.wind_dir_deg, 0)}&deg;`],
         ["Wave height", `${num(mo.wave_height_m, 2)} m`],
-      ])}</div>${raw({ hindcast: hind, forecast: fore })}`;
+      ])}</div>${raw({ hindcast: hind, forecast: fore })}`);
+    if (ctx.stale() || !$("#df-map")) return;
 
     const c = hind.best_estimate || [inv.centroid_lat, inv.centroid_lon];
     const map = makeMap($("#df-map"), { center: c, zoom: 8 });
@@ -806,7 +855,11 @@ async function driftForecast(ctx, params) {
     if (fc.length > 1) trackLine(map, fc, { color: "#2ea6ff" });
     const bl = shorelineContact(map, fore.coastal_impact);
     if (bl) layers.push(bl);
+    mapLegend(map, ["anom-hi", "origin", ...(bl ? ["beach"] : [])]);
     if (layers.length) fit(map, layers);
+   } catch (e) {
+     if (!ctx.stale()) setHTML("#df-body", errorState(e));
+   }
   }
   $("#df-inv").addEventListener("change", (e) => render(e.target.value));
   render(id);
@@ -822,27 +875,47 @@ function meanPoint(pts) {
 async function evidence(ctx, params) {
   const invs = await loadInvestigations();
   const id = params[0] || invs[0]?.id;
-  ctx.root.innerHTML = page("Evidence Dossier", "Structured incident report - JSON is the system of record; the printable view produces a PDF.",
-    `<div class="panel"><div class="row"><label>Investigation
-      <select id="ev-inv">${invs.map((i) => `<option value="${i.id}" ${i.id == id ? "selected" : ""}>${h(i.reference)} - ${h(i.title)}</option>`).join("")}</select>
-    </label>
-    <button class="btn" id="ev-json">Download JSON</button>
-    <button class="btn" id="ev-md">Download Markdown</button>
-    <button class="btn btn-primary" id="ev-print">Open printable view</button>
-    <span id="ev-msg" class="muted"></span></div></div>
-    <div class="panel"><h2>Preview</h2><iframe id="ev-frame" class="dossier" title="dossier"></iframe></div>`);
-  if (!invs.length) { $("#view .panel:last-child").innerHTML = `<p class="empty">No investigations.</p>`; return; }
+  ctx.root.innerHTML = page("Evidence Dossier", "Structured incident report — JSON is the system of record; the printable view produces a PDF.",
+    `<div class="panel report-toolbar">
+       <label>Investigation
+         <select id="ev-inv">${invs.map((i) => `<option value="${i.id}" ${i.id == id ? "selected" : ""}>${h(i.reference)} - ${h(i.title)}</option>`).join("")}</select>
+       </label>
+       <span class="spacer"></span>
+       <button class="btn btn-sm" id="ev-json">JSON</button>
+       <button class="btn btn-sm" id="ev-md">Markdown</button>
+       <button class="btn btn-sm btn-primary" id="ev-print">Open printable / PDF</button>
+       <span id="ev-msg" class="muted"></span>
+     </div>
+     <div id="ev-meta" class="report-meta"></div>
+     <div class="report-frame"><iframe id="ev-frame" class="dossier" title="Evidence dossier"></iframe></div>`);
+  if (!invs.length) { setHTML(".report-frame", emptyState("inbox", "No investigations yet", "Run a scenario to generate an evidence dossier.")); return; }
 
   let current = id;
+  function renderMeta(iid) {
+    const inv = invs.find((i) => String(i.id) === String(iid)) || {};
+    const sm = inv.summary_metrics || {};
+    const ps = sm.attribution?.summary?.prime_suspect?.identity?.name
+      || Object.values(sm.vessel_tracks || {}).find((v) => v?.attribution?.is_prime)?.name;
+    setHTML("#ev-meta", `
+      <div><span class="rm-k">Reference</span><span class="rm-v mono">${h(inv.reference || "-")}</span></div>
+      <div><span class="rm-k">Status</span><span class="rm-v">${statusBadge(inv.status || "-")}</span></div>
+      <div><span class="rm-k">Scene</span><span class="rm-v">${h(sm.sar?.scene_classification || "-")}</span></div>
+      <div><span class="rm-k">Prime suspect</span><span class="rm-v">${h(ps || "—")}</span></div>
+      <div><span class="rm-k">Opened</span><span class="rm-v">${when(inv.created_at)}</span></div>`);
+  }
   async function loadFrame(iid) {
     current = iid;
-    $("#ev-msg").textContent = "Rendering...";
+    renderMeta(iid);
+    $("#ev-msg").textContent = "Rendering…";
     try {
       const html = await fetchText(`/investigations/${iid}/dossier.html`);
+      if (ctx.stale()) return;
       const blob = new Blob([html], { type: "text/html" });
       $("#ev-frame").src = URL.createObjectURL(blob);
       $("#ev-msg").textContent = "";
-    } catch (e) { $("#ev-msg").textContent = e.message; }
+    } catch (e) {
+      if (!ctx.stale()) { setHTML(".report-frame", errorState(e)); $("#ev-msg").textContent = ""; }
+    }
   }
   function download(name, text, type) {
     const blob = new Blob([text], { type });
@@ -870,41 +943,86 @@ async function evidence(ctx, params) {
 }
 
 /* ============================================================ ALERTS == */
+const ALERT_TONE = { SENT: "ok", MOCKED: "info", PENDING: "warn", FAILED: "crit", SUPPRESSED: "mut" };
 async function alerts(ctx) {
-  ctx.root.innerHTML = page("Alerts", "Fingerprinted, deduplicated SMS dispatch. Mock provider is used locally; Twilio when configured.",
-    `<div class="panel"><div class="row">
-      <button class="btn btn-primary" id="al-test">Send test SMS to my number</button>
-      <span id="al-msg" class="muted"></span>
-    </div></div><div class="panel"><h2>Alert feed</h2><div id="al-body"></div></div>`);
+  ctx.root.innerHTML = page("Alert Center", "Fingerprinted, deduplicated SMS dispatch. Mock provider locally; Twilio when configured.",
+    `<div class="kpis" id="al-kpis"></div>
+     <div class="panel"><div class="row">
+       <button class="btn btn-primary btn-sm" id="al-test">Send test SMS to my number</button>
+       <span class="spacer"></span>
+       <div class="filter-chips" id="al-filter"></div>
+     </div><span id="al-msg" class="muted"></span></div>
+     <div class="panel"><h2>Alert feed <span class="h2-note" id="al-count"></span></h2><div id="al-body">${skeleton(4)}</div></div>`);
+
+  let filter = "ALL";
+  let allRows = [];
 
   $("#al-test").addEventListener("click", async () => {
     $("#al-test").disabled = true;
     try {
       const a = await api.testSms("Operations Console test message.");
       $("#al-msg").textContent = `Test alert #${a.id}: ${a.status} via ${a.provider || "mock"}.`;
-      load();
+      await load();
     } catch (e) { $("#al-msg").textContent = e.message; }
     $("#al-test").disabled = false;
   });
 
-  async function load() {
-    let rows;
-    try { rows = await api.alerts(); }
-    catch (e) { $("#al-body").innerHTML = `<p class="empty">${e.status === 403 ? "Alerts require REGIONAL or NATIONAL role." : h(e.message)}</p>`; return; }
-    $("#al-body").innerHTML = rows.length ? `<table class="data"><thead><tr>
-      <th>#</th><th>Status</th><th>Recipient</th><th>Message</th><th>Conf.</th><th>Provider</th><th>Att.</th><th>Sent</th><th></th></tr></thead><tbody>${
-      rows.map((a) => `<tr>
-        <td class="mono">${a.id}</td><td>${alertBadge(a.status)}</td><td class="mono">${h(a.recipient)}</td>
-        <td>${h((a.message || "").slice(0, 90))}</td><td>${a.triggered_by_confidence != null ? pct(a.triggered_by_confidence) : "-"}</td>
-        <td>${h(a.provider || "-")}</td><td>${a.attempts}</td><td>${when(a.sent_at)}</td>
-        <td>${a.status === "FAILED" ? `<button class="btn sm" data-retry="${a.id}">Retry</button>` : ""}</td></tr>` +
-        (a.last_error ? `<tr><td></td><td colspan="8" class="muted">${h(a.last_error)}</td></tr>` : "")).join("")
-    }</tbody></table>` : `<p class="empty">No alerts raised yet.</p>`;
+  function renderKpisAndFilter() {
+    const by = (s) => allRows.filter((a) => a.status === s).length;
+    setHTML("#al-kpis",
+      kpi(by("SENT"), "Sent", "ok") + kpi(by("MOCKED"), "Mocked", "info") +
+      kpi(by("FAILED"), "Failed", "crit") + kpi(by("SUPPRESSED"), "Suppressed (deduped)", "mut"));
+    const opts = ["ALL", "SENT", "MOCKED", "FAILED", "SUPPRESSED", "PENDING"];
+    setHTML("#al-filter", opts
+      .filter((s) => s === "ALL" || allRows.some((a) => a.status === s))
+      .map((s) => `<button class="chip-btn${s === filter ? " active" : ""}" data-f="${s}">${s === "ALL" ? "All" : s}</button>`).join(""));
+    $$("#al-filter .chip-btn").forEach((b) => b.addEventListener("click", () => { filter = b.dataset.f; paint(); }));
+  }
+
+  function paint() {
+    $$("#al-filter .chip-btn").forEach((b) => b.classList.toggle("active", b.dataset.f === filter));
+    const rows = filter === "ALL" ? allRows : allRows.filter((a) => a.status === filter);
+    $("#al-count").textContent = `${rows.length}`;
+    if (!rows.length) {
+      setHTML("#al-body", emptyState("bell", filter === "ALL" ? "No alerts raised yet" : `No ${filter.toLowerCase()} alerts`));
+      return;
+    }
+    setHTML("#al-body", `<div class="alert-list">${rows.map((a) => `
+      <div class="alert-row t-${ALERT_TONE[a.status] || "mut"}">
+        <div class="ar-head">
+          <span class="ar-id mono">#${a.id}</span>
+          ${alertBadge(a.status)}
+          <span class="ar-rcpt mono">${h(a.recipient || "—")}</span>
+          <span class="spacer"></span>
+          <span class="ar-when muted">${when(a.sent_at)}</span>
+        </div>
+        <div class="ar-msg">${h((a.message || "").slice(0, 160))}</div>
+        <div class="ar-foot muted">
+          ${a.triggered_by_confidence != null ? `trigger ${pct(a.triggered_by_confidence)} · ` : ""}
+          via ${h(a.provider || "—")} · attempt ${a.attempts}
+          ${a.status === "FAILED" ? `<button class="btn btn-sm" data-retry="${a.id}">Retry</button>` : ""}
+        </div>
+        ${a.last_error ? `<div class="ar-err">${h(a.last_error)}</div>` : ""}
+      </div>`).join("")}</div>`);
     $$("#al-body [data-retry]").forEach((b) => b.addEventListener("click", async () => {
       b.disabled = true;
-      try { await api.retryAlert(b.dataset.retry); ctx.toast("Retry submitted."); load(); }
+      try { await api.retryAlert(b.dataset.retry); ctx.toast("Retry submitted."); await load(); }
       catch (e) { ctx.toast(e.message, true); b.disabled = false; }
     }));
+  }
+
+  async function load() {
+    try { allRows = await api.alerts(); }
+    catch (e) {
+      setHTML("#al-body", e.status === 403
+        ? emptyState("alert", "Not available", "The alert center requires REGIONAL or NATIONAL role.")
+        : errorState(e));
+      setHTML("#al-kpis", "");
+      return;
+    }
+    if (ctx.stale()) return;
+    renderKpisAndFilter();
+    paint();
   }
   load();
 }
@@ -920,16 +1038,23 @@ async function analytics(ctx) {
   const correct = gt.filter((g) => g.correctly_ranked_first).length;
   const delivered = al.filter((a) => ["SENT", "MOCKED"].includes(a.status)).length;
 
+  if (!invs.length) {
+    ctx.root.innerHTML = page("Analytics", "Aggregate performance across every investigation in your scope.",
+      emptyState("inbox", "Nothing to analyse yet", "Run a few scenarios and this fills with attribution accuracy and delivery stats."));
+    return;
+  }
+
+  const topRate = gt.length ? correct / gt.length : null;
   ctx.root.innerHTML = page("Analytics", "Aggregate performance across every investigation in your scope.",
     `<div class="kpis">
       ${kpi(invs.length, "Investigations")}
-      ${kpi(gt.length ? `${correct}/${gt.length}` : "-", "Top-1 attribution")}
-      ${kpi(al.length ? `${delivered}/${al.length}` : "-", "Alerts delivered")}
-      ${kpi(pctMean(invs.map((i) => i.summary_metrics?.sar?.confidence)), "Mean confidence")}
+      ${kpi(gt.length ? `${correct}/${gt.length}` : "-", "Top-1 attribution", topRate == null ? "" : topRate >= 0.999 ? "ok" : topRate >= 0.5 ? "warn" : "crit")}
+      ${kpi(al.length ? `${delivered}/${al.length}` : "-", "Alerts delivered", al.length ? "ok" : "")}
+      ${kpi(pctMean(invs.map((i) => i.summary_metrics?.sar?.confidence)), "Mean confidence", "info")}
     </div>
     <div class="grid cols-2">
-      <div class="panel"><h2>By status</h2>${barList(byStatus)}</div>
-      <div class="panel"><h2>By scene verdict</h2>${barList(byClass)}</div>
+      <div class="panel"><h2>By status</h2>${barList(byStatus, STATUS_TONE)}</div>
+      <div class="panel"><h2>By scene verdict</h2>${barList(byClass, VERDICT_TONE)}</div>
     </div>
     <div class="panel"><h2>Attribution ground-truth checks</h2>${
       gt.length ? `<table class="data"><thead><tr><th>Culprit MMSI</th><th>Rank assigned</th><th>Top-1?</th></tr></thead><tbody>${
@@ -939,10 +1064,13 @@ async function analytics(ctx) {
     }</div>`);
 }
 function tally(arr) { const o = {}; for (const x of arr) o[x] = (o[x] || 0) + 1; return o; }
-function barList(obj) {
+const STATUS_TONE = { RESOLVED: "ok", IN_PROGRESS: "info", OPEN: "warn", ARCHIVED: "mut" };
+const VERDICT_TONE = { "Oil-like anomaly": "crit", "Likely look-alike": "warn", "No significant anomaly": "info" };
+function barList(obj, tones = {}) {
   const max = Math.max(1, ...Object.values(obj));
-  return Object.entries(obj).map(([k, v]) =>
-    `<div class="comprow"><span>${h(k)}</span><span class="bar"><i style="width:${(v / max * 100).toFixed(0)}%"></i></span><span class="mono">${v}</span></div>`
+  const entries = Object.entries(obj).sort((a, b) => b[1] - a[1]);
+  return entries.map(([k, v]) =>
+    `<div class="comprow ${tones[k] ? "bl-" + tones[k] : ""}"><span>${h(k)}</span><span class="bar"><i style="width:${(v / max * 100).toFixed(0)}%"></i></span><span class="mono">${v}</span></div>`
   ).join("") || `<p class="muted">no data</p>`;
 }
 function pctMean(xs) { const v = xs.filter((x) => x != null); return v.length ? pct(v.reduce((a, b) => a + b, 0) / v.length) : "-"; }
@@ -1059,7 +1187,7 @@ export function wireAuth(onAuthed) {
 async function userManagement(ctx) {
   ctx.root.innerHTML = page("User Management",
     "Create and maintain operator accounts. NATIONAL manages every account; REGIONAL manages PILOT accounts inside its region.",
-    `<div id="um-body"><p class="empty">Loading&hellip;</p></div>`);
+    `<div id="um-body">${skeleton(4)}</div>`);
 
   let scope, users, zones;
   try {
@@ -1068,9 +1196,13 @@ async function userManagement(ctx) {
       api.jurisdictions({ with_geometry: false }).catch(() => []),
     ]);
   } catch (e) {
-    $("#um-body").innerHTML = `<p class="empty">${e.status === 403 ? "User management requires REGIONAL or NATIONAL role." : h(e.message)}</p>`;
+    if (ctx.stale()) return;
+    setHTML("#um-body", e.status === 403
+      ? emptyState("alert", "Not available", "User management requires REGIONAL or NATIONAL role.")
+      : errorState(e));
     return;
   }
+  if (ctx.stale()) return;
   const zoneById = Object.fromEntries(zones.map((z) => [z.id, z.code]));
   const closure = scope.jurisdiction_closure_ids; // null = all
   const pickZones = (closure == null ? zones : zones.filter((z) => closure.includes(z.id)))

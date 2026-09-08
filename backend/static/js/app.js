@@ -1,8 +1,8 @@
 /* Bootstrap: auth gate, role-filtered grouped nav, hash router, theme toggle,
    live API-status indicator. */
 
-import { api, getToken, getStoredUser } from "./api.js?v=ui7";
-import { views, NAV, NAV_GROUPS, wireAuth } from "./views.js?v=ui7";
+import { api, getToken, getStoredUser } from "./api.js?v=ui8";
+import { views, NAV, NAV_GROUPS, wireAuth } from "./views.js?v=ui8";
 
 const ROLE_RANK = { PILOT: 1, REGIONAL: 2, NATIONAL: 3 };
 const THEME_KEY = "sn.theme";
@@ -83,7 +83,14 @@ function renderNav() {
 }
 
 /* --------------------------------------------------------------- router -- */
-const ctx = { get user() { return state.user; }, root: viewEl, go: (hash) => { location.hash = hash; }, toast };
+let _routeGen = 0;
+const ctx = {
+  get user() { return state.user; },
+  root: viewEl,
+  go: (hash) => { location.hash = hash; },
+  toast,
+  stale: () => false,   // replaced per-navigation in route()
+};
 
 function stateBlock(iconName, title, msg) {
   return `<div class="state"><div class="state-icon">${icon(iconName)}</div>
@@ -100,6 +107,9 @@ async function route() {
   const rank = ROLE_RANK[state.user.role] || 1;
   if (titleEl) titleEl.textContent = entry?.label || "OceanTrace";
 
+  const gen = ++_routeGen;
+  ctx.stale = () => _routeGen !== gen;   // async view code can bail if the user moved on
+
   if (!views[name] || (entry && rank < (ROLE_RANK[entry.min] || 1))) {
     renderNav();
     viewEl.innerHTML = stateBlock("alert", "Not available",
@@ -110,8 +120,10 @@ async function route() {
   viewEl.innerHTML = `<div class="loading-row"><span class="spin"></span> Loading&hellip;</div>`;
   try {
     await views[name](ctx, params);
+    if (ctx.stale()) return;
     viewEl.scrollTop = 0;
   } catch (e) {
+    if (ctx.stale()) return;
     console.error(e);
     viewEl.innerHTML = stateBlock("alert", "Something went wrong",
       String((e && e.message) || e || "Unexpected error"));
