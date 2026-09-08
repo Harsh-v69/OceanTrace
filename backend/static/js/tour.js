@@ -1,7 +1,7 @@
 /* Lightweight vanilla-JS product tour + a "restart" hook.
    No dependencies, no build. State (completed) lives in localStorage. */
 
-import { api } from "./api.js?v=ui17";
+import { api } from "./api.js?v=ui22";
 
 export const TOUR_KEY = "oceantrace.tour.done";
 export function tourCompleted() {
@@ -45,6 +45,7 @@ let _i = 0;
 let _invId = null;
 let _nav = (h) => { location.hash = h; };
 let _onKey = null;
+let _onRelayout = null;
 
 function el(tag, cls, html) {
   const e = document.createElement(tag);
@@ -68,6 +69,12 @@ async function waitFor(selector, timeout = 4000) {
 
 function teardown() {
   if (_onKey) { window.removeEventListener("keydown", _onKey); _onKey = null; }
+  if (_onRelayout) {
+    window.removeEventListener("resize", _onRelayout);
+    window.removeEventListener("scroll", _onRelayout, true);
+    document.removeEventListener("visibilitychange", _onRelayout);
+    _onRelayout = null;
+  }
   if (_root) { _root.remove(); _root = null; }
 }
 
@@ -76,67 +83,77 @@ function finish(completed) {
   if (completed) markDone();
 }
 
+let _target = null;   // current step's spotlight element (or null)
+
+/* Position the spotlight + card for the current step. Safe to call repeatedly
+   (on resize / visibilitychange) — it re-measures every time. */
+function layout() {
+  if (!_root) return;
+  const spot = _root.querySelector(".tour-spot");
+  const card = _root.querySelector(".tour-card");
+  const vw = window.innerWidth || 1280, vh = window.innerHeight || 800;
+  const cw = card.offsetWidth || 340, chh = card.offsetHeight || 210;
+  const r = _target && _target.getBoundingClientRect();
+  const hasT = !!(r && r.width > 0 && r.height > 0);
+
+  const pad = 8;
+  const sx = hasT ? r.left - pad : -40;
+  const sy = hasT ? r.top - pad : -40;
+  const sw = hasT ? r.width + pad * 2 : 0;
+  const sh = hasT ? r.height + pad * 2 : 0;
+  spot.dataset.on = hasT ? "1" : "";
+  spot.style.left = `${sx}px`;
+  spot.style.top = `${sy}px`;
+  spot.style.width = `${sw}px`;
+  spot.style.height = `${sh}px`;
+
+  let left, top;
+  if (hasT) {
+    if (r.right + 16 + cw < vw - 12) { left = r.right + 16; top = r.top; }
+    else if (r.bottom + 14 + chh < vh - 12) { left = r.left; top = r.bottom + 14; }
+    else { left = r.left; top = r.top - chh - 14; }
+  } else {
+    left = (vw - cw) / 2; top = (vh - chh) / 2;
+  }
+  card.style.left = `${Math.max(12, Math.min(left, vw - cw - 12))}px`;
+  card.style.top = `${Math.max(12, Math.min(top, vh - chh - 12))}px`;
+  card.style.opacity = "1";
+}
+
 async function show() {
   if (!_root) return;
   const step = STEPS[_i];
   const total = STEPS.length;
 
-  // navigate if needed
   if (step.needsInv && _invId != null) {
     if (!location.hash.startsWith(`#/workstation/${_invId}`)) _nav(`#/workstation/${_invId}`);
   } else if (step.view && location.hash !== step.view) {
     _nav(step.view);
   }
 
-  const spot = _root.querySelector(".tour-spot");
   const card = _root.querySelector(".tour-card");
   card.style.opacity = "0";
+  _target = null;
 
-  let target = null;
-  if (step.target) target = await waitFor(step.target, (step.view || step.needsInv) ? 5000 : 1500);
-  if (!_root) return; // torn down while waiting
+  if (step.target) _target = await waitFor(step.target, (step.view || step.needsInv) ? 5000 : 1500);
+  if (!_root) return;
 
-  // position spotlight
-  if (target) {
-    const r = target.getBoundingClientRect();
-    const pad = 8;
-    spot.style.display = "block";
-    spot.style.left = `${r.left - pad}px`;
-    spot.style.top = `${r.top - pad}px`;
-    spot.style.width = `${r.width + pad * 2}px`;
-    spot.style.height = `${r.height + pad * 2}px`;
-    try { target.scrollIntoView({ block: "center", behavior: "smooth" }); } catch {}
-  } else {
-    spot.style.display = "none";
+  if (_target) {
+    try { _target.scrollIntoView({ block: "center", behavior: "smooth" }); } catch {}
+    await new Promise((res) => setTimeout(res, 240));
+    if (!_root) return;
   }
 
-  // fill + position card
   card.querySelector(".tour-step").textContent = `Step ${_i + 1} of ${total}`;
   card.querySelector(".tour-title").textContent = step.title;
   card.querySelector(".tour-body").textContent = step.body;
-  const backBtn = card.querySelector('[data-act="back"]');
-  const nextBtn = card.querySelector('[data-act="next"]');
-  backBtn.disabled = _i === 0;
-  nextBtn.textContent = _i === total - 1 ? "Finish" : "Next";
+  card.querySelector('[data-act="back"]').disabled = _i === 0;
+  card.querySelector('[data-act="next"]').textContent = _i === total - 1 ? "Finish" : "Next";
 
-  // place the card near the target, else centre it
-  requestAnimationFrame(() => {
-    const cw = card.offsetWidth, chh = card.offsetHeight;
-    const vw = window.innerWidth, vh = window.innerHeight;
-    let left, top;
-    if (target && spot.style.display !== "none") {
-      const r = target.getBoundingClientRect();
-      top = r.bottom + 14;
-      if (top + chh > vh - 12) top = Math.max(12, r.top - chh - 14);
-      left = Math.min(Math.max(12, r.left), vw - cw - 12);
-    } else {
-      left = (vw - cw) / 2;
-      top = (vh - chh) / 2;
-    }
-    card.style.left = `${left}px`;
-    card.style.top = `${top}px`;
-    card.style.opacity = "1";
-  });
+  layout();
+  requestAnimationFrame(layout);
+  // one more pass after the view/map has certainly settled
+  setTimeout(() => { if (_root) layout(); }, 500);
 }
 
 function go(delta) {
@@ -187,7 +204,10 @@ export async function startTour(opts = {}) {
     else if (e.key === "ArrowLeft") go(-1);
   };
   window.addEventListener("keydown", _onKey);
-  window.addEventListener("resize", () => { if (_root) show(); }, { passive: true });
+  _onRelayout = () => { if (_root) layout(); };
+  window.addEventListener("resize", _onRelayout, { passive: true });
+  window.addEventListener("scroll", _onRelayout, { passive: true, capture: true });
+  document.addEventListener("visibilitychange", _onRelayout);
 
   show();
 }

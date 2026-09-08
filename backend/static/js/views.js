@@ -1,13 +1,13 @@
 /* All screens for the Operations Console. Each view renders into ctx.root and
    wires its own events. ctx = { user, root, go, toast }. */
 
-import { api, fetchText } from "./api.js?v=ui17";
+import { api, fetchText } from "./api.js?v=ui22";
 import {
   makeMap, anomalyMarker, vesselMarker, trackLine, polygon, fit, L,
   vesselTrackLayer, vesselPopupHtml, shorelineContact, mapLegend,
   reconstructedDriftLine, overlayControl, clusterGroup,
-} from "./map.js?v=ui17";
-import { startTour, resetTour } from "./tour.js?v=ui17";
+} from "./map.js?v=ui22";
+import { startTour, resetTour } from "./tour.js?v=ui22";
 
 /* -------------------------------------------------------------- helpers -- */
 const h = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>

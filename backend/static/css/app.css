@@ -382,14 +382,16 @@ code {
 .help:hover::after, .help:focus-visible::after { opacity: 1; }
 
 /* ---- guided tour ---------------------------------------------- */
-.tour-overlay { position: fixed; inset: 0; z-index: 200; pointer-events: none; }
+/* z-index must clear every Leaflet pane / control (Leaflet tops out ~1000). */
+.tour-overlay { position: fixed; inset: 0; z-index: 10000; pointer-events: none; }
 .tour-spot {
-  position: absolute; display: none; border-radius: 10px;
-  box-shadow: 0 0 0 9999px rgba(4, 10, 20, .58), 0 0 0 2px var(--brand);
+  position: absolute; border-radius: 10px;
+  box-shadow: 0 0 0 9999px rgba(4, 10, 20, .62);
   transition: left .25s, top .25s, width .25s, height .25s;
 }
+.tour-spot[data-on="1"] { box-shadow: 0 0 0 9999px rgba(4, 10, 20, .62), 0 0 0 2px var(--brand); }
 .tour-card {
-  position: absolute; pointer-events: auto; width: min(360px, calc(100vw - 24px));
+  position: absolute; pointer-events: auto; width: 360px; max-width: 94vw;
   background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--r-lg);
   box-shadow: var(--shadow-2); padding: 1rem 1.1rem; opacity: 0; transition: opacity .18s, left .2s, top .2s;
 }
