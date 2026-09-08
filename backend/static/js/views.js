@@ -1,11 +1,11 @@
 /* All screens for the Operations Console. Each view renders into ctx.root and
    wires its own events. ctx = { user, root, go, toast }. */
 
-import { api, fetchText } from "./api.js?v=ui5";
+import { api, fetchText } from "./api.js?v=ui7";
 import {
   makeMap, anomalyMarker, vesselMarker, trackLine, polygon, fit, L,
   vesselTrackLayer, vesselPopupHtml, shorelineContact, mapLegend,
-} from "./map.js?v=ui5";
+} from "./map.js?v=ui7";
 
 /* -------------------------------------------------------------- helpers -- */
 const h = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -55,32 +55,74 @@ async function loadInvestigations() {
   try { return await api.investigations(); } catch { return []; }
 }
 
-/* candidate component families for the bars */
-const FAMILY = { physical: "physical", ais: "ais", behavioural: "behavioural" };
+/* the 8 unified-fusion components, in display order, with UI labels.
+   Keys match backend summary_metrics.attribution.candidates[].components. */
+const COMPONENTS = [
+  ["spatiotemporal", "Spatiotemporal", "physical"],
+  ["axis_alignment", "Axis alignment", "physical"],
+  ["proximity", "CPA · closest approach", "ais"],
+  ["dwell", "Dwell near slick", "ais"],
+  ["blackout", "AIS blackout", "ais"],
+  ["ais_anomaly", "AIS anomaly · autoencoder", "ais"],
+  ["route_deviation", "Route deviation · LSTM", "behavioural"],
+  ["vessel_prior", "Vessel-type prior", "behavioural"],
+];
+
+/* canonical assessment bands -> label + tone */
+const BAND_LABEL = {
+  PRIME_SUSPECT: "Prime suspect", PERSON_OF_INTEREST: "Person of interest",
+  WEAK_LEAD: "Weak lead", BACKGROUND_TRAFFIC: "Background traffic", CLEARED: "Cleared",
+};
+const BAND_TONE = {
+  PRIME_SUSPECT: "crit", PERSON_OF_INTEREST: "hot", WEAK_LEAD: "warn",
+  BACKGROUND_TRAFFIC: "mut", CLEARED: "ok",
+};
+function assessmentBadge(band) {
+  const key = String(band || "").toUpperCase();
+  return `<span class="band band-${BAND_TONE[key] || "mut"}">${h(BAND_LABEL[key] || band || "—")}</span>`;
+}
 
 function candidateCard(c, truthMmsi) {
   const comps = c.components || {};
-  const order = ["spatiotemporal", "axis_alignment", "proximity", "blackout", "ais_anomaly", "route_deviation", "vessel_prior"];
-  const rows = order.filter((k) => comps[k]).map((k) => {
+  const id = c.identity || {};
+  const isTruth = truthMmsi != null && id.mmsi === truthMmsi;
+
+  const rows = COMPONENTS.map(([k, label, fam]) => {
     const cc = comps[k];
-    const fam = cc.family || "physical";
-    const w = Math.max(0, Math.min(1, cc.value)) * 100;
-    return `<div class="comprow ${fam}">
-      <span title="${h(fam)} evidence">${h(k.replace(/_/g, " "))}</span>
-      <span class="bar"><i style="width:${w.toFixed(0)}%"></i></span>
-      <span class="mono">${(cc.points ?? 0).toFixed(1)}</span></div>`;
+    if (!cc) return "";
+    const avail = cc.available !== false;
+    const v = Math.max(0, Math.min(1, Number(cc.value) || 0));
+    const pts = Number(cc.points ?? 0);
+    return `<div class="comprow ${fam}${avail ? "" : " na"}" title="${h(cc.detail?.finding || label)}">
+      <span class="comprow-l">${h(label)}</span>
+      <span class="comprow-p mono">${avail ? pts.toFixed(1) : "n/a"}</span>
+      <span class="bar"><i style="width:${(v * 100).toFixed(0)}%"></i></span>
+    </div>`;
   }).join("");
-  const isTruth = truthMmsi != null && c.identity.mmsi === truthMmsi;
-  return `<div class="cand ${c.rank === 1 ? "top" : ""}">
-    <div class="h">
-      <b>#${c.rank ?? "-"} ${h(c.identity.name)}</b>
-      <span class="score">${num(c.score, 1)}</span>
+
+  const top = COMPONENTS
+    .map(([k, label]) => ({ label, pts: Number(comps[k]?.points ?? 0) }))
+    .filter((x) => x.pts > 0.5).sort((a, b) => b.pts - a.pts).slice(0, 3)
+    .map((x) => x.label);
+
+  return `<div class="cand ${c.rank === 1 ? "top" : ""}" data-mmsi="${h(id.mmsi)}">
+    <div class="cand-top">
+      <div class="cand-id">
+        <div class="cand-name">#${c.rank ?? "-"} ${h(id.name || "Unknown vessel")}</div>
+        <div class="cand-meta mono">MMSI ${h(id.mmsi)} &middot; ${h(id.vessel_type || "type ?")}${id.flag ? " &middot; " + h(id.flag) : ""}</div>
+      </div>
+      <div class="cand-score"><b>${num(c.score, 1)}</b><span>/ 100</span></div>
     </div>
-    <div class="muted mono">MMSI ${h(c.identity.mmsi)} &middot; ${h(c.identity.vessel_type || "?")} &middot; ${h(c.identity.flag || "?")}
-      ${isTruth ? ' &middot; <span class="badge ok">ground truth</span>' : ""}</div>
-    <div class="muted">${h(c.assessment || "")}${c.margin_over_next != null ? ` &middot; margin +${num(c.margin_over_next, 1)}` : ""}</div>
+    <div class="cand-badges">
+      ${assessmentBadge(c.assessment)}
+      ${c.margin_over_next != null ? `<span class="badge mut">+${num(c.margin_over_next, 1)} vs next</span>` : ""}
+      ${isTruth ? `<span class="badge ok">ground truth</span>` : ""}
+    </div>
+    ${top.length ? `<div class="cand-why"><span class="muted">Why:</span> ${top.map(h).join(" &middot; ")}</div>` : ""}
     <div class="comps">${rows}</div>
-    ${c.best_match_time_h != null ? `<div class="finding">Best space-time match at T${c.best_match_time_h >= 0 ? "+" : ""}${num(c.best_match_time_h, 1)} h &middot; CPA ${num(c.cpa_km, 1)} km</div>` : ""}
+    ${c.best_match_time_h != null
+      ? `<div class="finding">Closest approach at T${c.best_match_time_h >= 0 ? "+" : ""}${num(c.best_match_time_h, 1)} h &middot; ${num(c.cpa_km, 1)} km</div>`
+      : ""}
   </div>`;
 }
 
@@ -348,44 +390,48 @@ async function workstation(ctx, params) {
   const truth = m.scenario?.truth_mmsi ?? null;
   const prim = sar.primary_detection?.characterization || {};
 
-  ctx.root.innerHTML = page(`${h(inv.reference)} - ${h(inv.title)}`, m.verdict || inv.description,
-    `<div class="row" style="margin-bottom:1rem">
+  const cls = sar.scene_classification || "-";
+  const clsTone = cls === "Oil-like anomaly" ? "crit" : cls === "Likely look-alike" ? "warn" : "info";
+  const laVerdict = sar.primary_detection?.look_alike_filter?.verdict
+    || (cls === "Oil-like anomaly" ? "passed — not a look-alike" : cls === "Likely look-alike" ? "flagged as look-alike" : "—");
+  const ci = fore.coastal_impact || {};
+
+  ctx.root.innerHTML = page(`${h(inv.reference)} — ${h(inv.title)}`, m.verdict || inv.description,
+    `<div class="row ws-actions">
       ${statusBadge(inv.status)} ${confBadge(sar.confidence)}
-      <span class="badge mut">${h(sar.scene_classification || "-")}</span>
+      <span class="badge ${clsTone === "crit" ? "crit" : clsTone === "warn" ? "warn" : "info"}">${h(cls)}</span>
       ${m.iou ? `<span class="badge info" title="vs operator ground-truth mask">IoU ${num(m.iou.value, 3)}</span>` : ""}
       <span class="spacer"></span>
-      <label class="btn" style="cursor:pointer">Ingest AIS CSV
+      <label class="btn btn-sm" style="cursor:pointer">Ingest AIS CSV
         <input type="file" id="ws-ais" accept=".csv" hidden></label>
-      <button class="btn" id="ws-evidence">Evidence dossier</button>
+      <button class="btn btn-sm" id="ws-evidence">Evidence dossier</button>
     </div>
-    <p id="ws-ais-msg" class="muted" style="margin:-.6rem 0 1rem"></p>
+    <p id="ws-ais-msg" class="muted" style="margin:-.4rem 0 1rem"></p>
     <div class="workstation">
-      <div class="wcol">
-        <div class="panel"><h2>Scene, drift &amp; vessel tracks</h2><div id="ws-map" class="map sm"></div>
-          <div class="timeline"><div class="tl-label"><span>T-48h</span><span id="ws-tl-now">observation (T0)</span><span>T+48h</span></div>
-          <input type="range" id="ws-tl" min="-48" max="48" value="0" step="1"></div>
-          <p class="muted" style="font-size:.78rem">Red = prime suspect track · amber ring = loitering · dashed red = AIS blackout. Drag the slider to walk each vessel to its position at that time.</p>
-          <div id="ws-vessel" class="finding" hidden></div>
+      <div class="wcol ws-left">
+        <div class="panel">
+          <h2>Anomaly</h2>
+          <div class="anom-head">
+            <span class="cls-chip t-${clsTone}">${h(cls)}</span>
+            <span class="cls-conf">${sar.confidence != null ? pct(sar.confidence) : "n/a"} <small>confidence</small></span>
+          </div>
+          ${kv([
+            ["Area", `${num(prim.area_km2, 2)} km&sup2;`],
+            ["Centroid", `<span class="mono">${num(inv.centroid_lat, 3)}, ${num(inv.centroid_lon, 3)}</span>`],
+            ["Major / minor axis", `${num(prim.major_axis_km, 2)} / ${num(prim.minor_axis_km, 2)} km`],
+            ["Orientation", `${num(prim.orientation_deg, 0)}&deg;`],
+            ["Look-alike ruling", h(laVerdict)],
+            ...(m.iou ? [["IoU vs ground truth", num(m.iou.value, 3)]] : []),
+          ])}
         </div>
-      </div>
-      <div class="wcol">
-        <div class="panel"><h2>Spill mask</h2>${kv([
-          ["Classification", h(sar.scene_classification || "-")],
-          ["Area", `${num(prim.area_km2, 2)} km&sup2;`],
-          ["Centroid", `<span class="mono">${num(inv.centroid_lat, 3)}, ${num(inv.centroid_lon, 3)}</span>`],
-          ["Major / minor axis", `${num(prim.major_axis_km, 2)} / ${num(prim.minor_axis_km, 2)} km`],
-          ["Orientation", `${num(prim.orientation_deg, 0)}&deg;`],
-          ["Look-alike filter", h(sar.primary_detection?.look_alike_filter?.verdict
-            || (sar.scene_classification === "Oil-like anomaly" ? "passed - not a look-alike" : "-"))],
-        ])}</div>
         <div class="panel"><h2>Reconstructed origin</h2>${kv([
-          ["Best estimate", `<span class="mono">${(hind.best_estimate || []).map((v) => num(v, 3)).join(", ")}</span>`],
+          ["Best estimate", `<span class="mono">${(hind.best_estimate || []).map((v) => num(v, 3)).join(", ") || "&mdash;"}</span>`],
           ["Uncertainty radius", `${num(hind.uncertainty_radius_km, 1)} km`],
-          ["Release window", (hind.release_window_h || []).map((v) => `T${v >= 0 ? "+" : ""}${num(v, 1)}h`).join(" .. ")],
+          ["Release window", (hind.release_window_h || []).map((v) => `T${v >= 0 ? "+" : ""}${num(v, 1)}h`).join(" .. ") || "&mdash;"],
           ["Age estimate", `${num(hind.age_point_estimate_h, 1)} h (${h(hind.age_source || "-")})`],
           ["Feedback loop", m.feedback_loop?.converged ? `converged in ${m.feedback_loop.n_iterations} iter` : `${m.feedback_loop?.n_iterations ?? "-"} iter`],
         ])}</div>
-        <div class="panel"><h2>Forward forecast</h2>${
+        <div class="panel"><h2>Forward forecast &amp; shoreline</h2>${
           (fore.horizons || []).length
             ? `<table class="data"><thead><tr><th>Horizon</th><th>Centroid</th><th>Radius</th><th>Beached</th></tr></thead><tbody>${
               fore.horizons.map((hz) => `<tr><td>+${h(hz.horizon_h ?? hz.t_h)}h</td>
@@ -393,20 +439,33 @@ async function workstation(ctx, params) {
                 <td>${num(hz.mean_radius_km, 1)} km</td>
                 <td>${hz.fraction_beached ? pct(hz.fraction_beached) : "-"}</td></tr>`).join("")}</tbody></table>`
             : `<p class="muted">Not computed (look-alike scene).</p>`
-        }${(() => {
-          const ci = fore.coastal_impact || {};
-          if (!ci.will_beach) return `<p class="muted">${h(ci.note || "No shoreline contact modelled.")}</p>`;
-          const fc = ci.first_contact_point || [];
-          return `<h3>Shoreline contact</h3>${kv([
-            ["First landfall ETA", `${num(ci.first_contact_eta_h ?? ci.eta_hours, 1)} h`],
-            ["Contact point", `<span class="mono">${num(fc[0], 3)}, ${num(fc[1], 3)}</span>`],
-            ["Oil ashore (48 h)", pct(ci.fraction_beached)],
-          ])}`;
-        })()}<p class="muted">${h(m.environmental_field?.label || "")}</p></div>
+        }${
+          !ci.will_beach
+            ? `<p class="muted">${h(ci.note || "No shoreline contact modelled.")}</p>`
+            : `<h3>Shoreline contact</h3>${kv([
+                ["First landfall ETA", `${num(ci.first_contact_eta_h ?? ci.eta_hours, 1)} h`],
+                ["Contact point", `<span class="mono">${num((ci.first_contact_point || [])[0], 3)}, ${num((ci.first_contact_point || [])[1], 3)}</span>`],
+                ["Oil ashore (48 h)", pct(ci.fraction_beached)],
+              ])}`
+        }<p class="muted" style="margin-top:.6rem">${h(m.environmental_field?.label || "")}</p></div>
       </div>
-      <div class="wcol">
-        <div class="panel"><h2>Ranked candidate vessels</h2>
-          <p class="muted">${h(attr.summary?.verdict || "No attribution for this scene.")}</p>
+
+      <div class="wcol ws-center">
+        <div class="panel ws-map-panel">
+          <h2>Investigation map <span class="h2-note" id="ws-map-note"></span></h2>
+          <div id="ws-map" class="map"></div>
+          <div class="timeline">
+            <div class="tl-label"><span>T&minus;48h</span><span id="ws-tl-now">observation (T0)</span><span>T+48h</span></div>
+            <input type="range" id="ws-tl" min="-48" max="48" value="0" step="1">
+          </div>
+          <div id="ws-vessel" class="ws-vessel" hidden></div>
+        </div>
+      </div>
+
+      <div class="wcol ws-right">
+        <div class="panel">
+          <h2>Ranked candidates <span class="h2-note">${cands.length || 0}</span></h2>
+          <p class="muted" style="font-size:.8rem">${h(attr.summary?.verdict || "No attribution for this scene.")}</p>
           <div id="ws-cands">${cands.map((c) => candidateCard(c, truth)).join("") || `<p class="empty">No vessels in the search window.</p>`}</div>
         </div>
       </div>
@@ -434,43 +493,66 @@ async function workstation(ctx, params) {
     }
   });
 
-  // ---- map: anomaly, origin, release polygon, drift frames ----
+  // ---- map: jurisdiction bounds, anomaly, origin, drift frames, vessel tracks ----
   const map = makeMap($("#ws-map"), inv.centroid_lat ? { center: [inv.centroid_lat, inv.centroid_lon], zoom: 8 } : {});
   const layers = [];
+
+  // jurisdiction bounds (best-effort; skipped silently if geometry unavailable)
+  drawJurisdictionBounds(map, m.jurisdiction).catch(() => {});
+
   if (inv.centroid_lat != null)
-    layers.push(anomalyMarker(map, inv.centroid_lat, inv.centroid_lon, { confidence: sar.confidence || 0, label: sar.scene_classification, ref: inv.reference }));
+    layers.push(anomalyMarker(map, inv.centroid_lat, inv.centroid_lon, {
+      confidence: sar.confidence || 0, label: cls, ref: inv.reference, classification: cls,
+    }));
   if (hind.best_estimate)
-    layers.push(L.circleMarker(hind.best_estimate, { radius: 6, color: "#35d07f", fillOpacity: 0.6 }).addTo(map).bindPopup("Reconstructed release origin"));
+    layers.push(L.circleMarker(hind.best_estimate, {
+      radius: 6, color: "#2fd08a", weight: 2, fillColor: "#2fd08a", fillOpacity: 0.6,
+    }).addTo(map).bindPopup("Reconstructed release origin"));
   if (hind.release_polygon?.length)
-    layers.push(polygon(map, hind.release_polygon, { color: "#35d07f", lonlat: guessLonLat(hind.release_polygon) }));
+    layers.push(polygon(map, hind.release_polygon, { color: "#2fd08a", lonlat: guessLonLat(hind.release_polygon) }));
   if (hind.confidence_ellipse?.length)
     polygon(map, hind.confidence_ellipse, { color: "#66c2ff", fillOpacity: 0.05, lonlat: guessLonLat(hind.confidence_ellipse) });
   const beachLayer = shorelineContact(map, fore.coastal_impact);
   if (beachLayer) layers.push(beachLayer);
 
-  // vessels: reconstructed track per candidate (prime in red), clickable
+  // vessels: one reconstructed track per candidate, linked to its card
   const vts = m.vessel_tracks || {};
   const vesselLayers = [];
+  const layerByMmsi = {};
   for (const c of cands) {
-    const view = vts[String(c.identity.mmsi)];
+    const mmsi = String(c.identity.mmsi);
+    const view = vts[mmsi];
     if (!view || !view.pings?.length) continue;
     const lyr = vesselTrackLayer(map, view, {
       prime: c.rank === 1,
-      onClick: (v) => showVesselDetail(v),
+      onClick: () => selectVessel(mmsi),
     });
+    lyr.view = view;
     vesselLayers.push(lyr);
+    layerByMmsi[mmsi] = lyr;
     layers.push(lyr.group);
   }
-  function showVesselDetail(view) {
-    const box = $("#ws-vessel");
-    if (!box) return;
-    box.hidden = false;
-    box.innerHTML = vesselPopupHtml(view);
+
+  function selectVessel(mmsi, { pan = true, scroll = true } = {}) {
+    $$("#ws-cands .cand").forEach((el) => el.classList.toggle("sel", el.dataset.mmsi === mmsi));
+    for (const [mm, lyr] of Object.entries(layerByMmsi)) lyr.setSelected?.(mm === mmsi);
+    const lyr = layerByMmsi[mmsi];
+    if (lyr?.view) {
+      const box = $("#ws-vessel");
+      if (box) { box.hidden = false; box.innerHTML = vesselPopupHtml(lyr.view); }
+      if (pan) { try { map.panInside(lyr.group.getBounds().getCenter(), { padding: [40, 40] }); } catch {} }
+    }
+    if (scroll) {
+      const card = $(`#ws-cands .cand[data-mmsi="${mmsi}"]`);
+      if (card) card.scrollIntoView({ block: "nearest" });
+    }
   }
-  if (cands[0]) {
-    const pv = vts[String(cands[0].identity.mmsi)];
-    if (pv) showVesselDetail(pv);
-  }
+  $$("#ws-cands .cand").forEach((el) =>
+    el.addEventListener("click", () => selectVessel(el.dataset.mmsi)));
+
+  mapLegend(map, ["anom-hi", "origin", "track-prime", "track-other", "loiter", "blackout",
+    ...(beachLayer ? ["beach"] : [])]);
+  $("#ws-map-note").textContent = `${vesselLayers.length} track(s)`;
 
   const frames = m.drift_frames || { hindcast: [], forecast: [] };
   let driftLayer = null;
@@ -491,6 +573,24 @@ async function workstation(ctx, params) {
   $("#ws-tl").addEventListener("input", (e) => showFrame(Number(e.target.value)));
   if (layers.length) fit(map, layers);
   showFrame(0);
+  if (cands[0]) selectVessel(String(cands[0].identity.mmsi), { pan: false, scroll: false });
+}
+
+/* Draw the maritime-zone polygon(s) for this investigation as a subtle outline.
+   Best-effort: needs /jurisdictions?with_geometry=true; any failure is ignored. */
+let _zoneGeoCache = null;
+async function drawJurisdictionBounds(map, juris) {
+  // draw just the most-specific (primary) zone — the region/nation would swamp the map
+  const code = juris.primary_code || (juris.chain_codes || [])[0];
+  if (!code) return;
+  if (!_zoneGeoCache) _zoneGeoCache = await api.jurisdictions({ with_geometry: true });
+  const z = (_zoneGeoCache || []).find((x) => String(x.code) === String(code));
+  const geo = z && (z.geometry || z.geojson || z.boundary);
+  if (!geo) return;
+  L.geoJSON(geo, {
+    style: { color: "#7aa7d6", weight: 1, opacity: 0.6, fill: false, dashArray: "6 5" },
+    interactive: false,
+  }).addTo(map);
 }
 function guessLonLat(ring) {
   // GeoJSON rings are [lon,lat]; if the first coord's |x|>90 it's a longitude

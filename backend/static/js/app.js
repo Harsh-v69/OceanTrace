@@ -1,8 +1,8 @@
 /* Bootstrap: auth gate, role-filtered grouped nav, hash router, theme toggle,
    live API-status indicator. */
 
-import { api, getToken, getStoredUser } from "./api.js?v=ui5";
-import { views, NAV, NAV_GROUPS, wireAuth } from "./views.js?v=ui5";
+import { api, getToken, getStoredUser } from "./api.js?v=ui7";
+import { views, NAV, NAV_GROUPS, wireAuth } from "./views.js?v=ui7";
 
 const ROLE_RANK = { PILOT: 1, REGIONAL: 2, NATIONAL: 3 };
 const THEME_KEY = "sn.theme";

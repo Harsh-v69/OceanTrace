@@ -179,20 +179,22 @@ function _interpPing(pings, tH) {
 
 /**
  * Render one reconstructed vessel track. Returns
- * { group, endMarker, positionAt(tH) } — positionAt moves a dot for the timeline.
+ * { group, endMarker, positionAt(tH), setSelected(on) }.
  * `view` is the object from summary_metrics.vessel_tracks[mmsi] or /vessels/{mmsi}/track.
  */
 export function vesselTrackLayer(map, view, opts = {}) {
   const pings = view?.pings || [];
   const g = L.layerGroup().addTo(map);
-  if (pings.length < 1) return { group: g, endMarker: null, positionAt: () => {} };
+  if (pings.length < 1) return { group: g, endMarker: null, positionAt: () => {}, setSelected: () => {} };
 
   const prime = opts.prime ?? view?.attribution?.is_prime;
   const color = opts.color || (prime ? "#ff6b6b" : "#8aa0bd");
   const latlngs = pings.map((p) => [p.lat, p.lon]);
 
+  let halo = null, mainLine = null;
   if (latlngs.length > 1) {
-    L.polyline(latlngs, { color, weight: prime ? 3 : 2, opacity: 0.9 }).addTo(g);
+    halo = L.polyline(latlngs, { color, weight: prime ? 10 : 8, opacity: 0 }).addTo(g);
+    mainLine = L.polyline(latlngs, { color, weight: prime ? 3 : 2, opacity: 0.9 }).addTo(g);
   }
   // blackout gaps as dashed segments between the fixes bracketing each gap
   for (const b of (view.blackouts || [])) {
@@ -227,7 +229,14 @@ export function vesselTrackLayer(map, view, opts = {}) {
     if (!dot) dot = L.circleMarker(p, { radius: 5, color, weight: 2, fillColor: color, fillOpacity: 0.9 }).addTo(g);
     else dot.setLatLng(p);
   }
-  return { group: g, endMarker, positionAt };
+  function setSelected(on) {
+    if (halo) halo.setStyle({ opacity: on ? 0.28 : 0 });
+    if (mainLine) mainLine.setStyle({ weight: on ? (prime ? 4.5 : 3.5) : (prime ? 3 : 2) });
+    const el = endMarker && endMarker.getElement && endMarker.getElement();
+    if (el) el.classList.toggle("sel", !!on);
+    if (on && mainLine) mainLine.bringToFront();
+  }
+  return { group: g, endMarker, positionAt, setSelected };
 }
 
 export function vesselPopupHtml(view) {
